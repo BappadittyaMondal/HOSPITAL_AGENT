@@ -1,4 +1,4 @@
-﻿# ====================================================================================================
+# ====================================================================================================
 # PROJECT "HOSPITAL" — CORE API SERVICE CONTAINER
 # ====================================================================================================
 FROM python:3.11-slim AS builder
@@ -17,7 +17,7 @@ WORKDIR /app
 COPY --from=builder /root/.local /home/hospital_user/.local
 COPY services/core-api /app
 
-ENV PATH=/home/hospital_user/.local/bin: \
+ENV PATH=/home/hospital_user/.local/bin:$PATH \
     PYTHONUNBUFFERED=1 \
     PORT=8080
 

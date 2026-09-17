@@ -53,6 +53,39 @@ def test_openapi_contract():
         return 1
     print(" [PASS] Clinical safety schema validated with hard_stops and microsecond metrics.")
 
+    # 6. Verify live ASGI application server implementation (main.py)
+    try:
+        core_api_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "services", "core-api"))
+        if core_api_dir not in sys.path:
+            sys.path.insert(0, core_api_dir)
+        import main
+        app = main.get_application()
+        if hasattr(app, "title"):
+            print(" [PASS] ASGI Core API application initialized successfully.")
+
+        if getattr(main, "HAS_FASTAPI", False):
+            from fastapi.testclient import TestClient
+            client = TestClient(main.app)
+            r_health = client.get("/health")
+            assert r_health.status_code == 200 and r_health.json()["status"] == "healthy"
+            print(" [PASS] Live ASGI /health probe verified HTTP 200 healthy.")
+
+            r_auth = client.post("/api/v1/auth/token", json={"username": "test_user", "password": "pwd", "tenant_id": "TENANT-001"})
+            assert r_auth.status_code == 200 and "JWT-" in r_auth.json()["token"]
+            print(" [PASS] Live ASGI /api/v1/auth/token verified.")
+
+            r_safe = client.post("/api/v1/safety/evaluate-order", json={
+                "patient_id": "PAT-TEST-001",
+                "clinician_id": "DOC-TEST-001",
+                "order_type": "MEDICATION",
+                "items": [{"code": "AMOX", "name": "Amoxicillin", "dose": "500mg"}]
+            }, headers={"X-Tenant-ID": "TENANT-001"})
+            assert r_safe.status_code == 200 and r_safe.json()["status"] == "APPROVED"
+            print(" [PASS] Live ASGI /api/v1/safety/evaluate-order verified.")
+    except Exception as e:
+        print(f" [FAIL] ASGI application verification failed: {e}")
+        return 1
+
     print("================================================================================")
     print(" ALL API CONTRACT INVARIANTS VERIFIED SUCCESSFULLY.")
     return 0
