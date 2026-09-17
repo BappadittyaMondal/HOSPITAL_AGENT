@@ -37,8 +37,8 @@ jobs:
       - name: Run Python Flake8 & Bandit (SAST)
         run: |
           pip install flake8 bandit
-          flake8 services/ai-orchestrator --count --select=E9,F63,F7,F82 --show-source --statistics || true
-          bandit -r services/ai-orchestrator -ll || true
+          flake8 services/ai-orchestrator services/core-api --count --select=E9,F63,F7,F82 --show-source --statistics
+          bandit -r services/ai-orchestrator services/core-api -ll -s B101,B104
 
   clinical-safety-regression:
     name: 2. Mandatory Clinical Safety Rule Regression Block

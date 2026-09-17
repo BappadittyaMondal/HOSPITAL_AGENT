@@ -261,3 +261,86 @@ paths:
             application/json:
               schema:
                 type: object
+
+  /transfusion/crossmatch:
+    post:
+      summary: Blood Bank Crossmatch & Inviolable ABO Safety Barrier
+      operationId: crossmatchBloodUnit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [recipient_mrn, recipient_blood_group, unit_barcode, transfusion_order_id]
+      responses:
+        '200':
+          description: ABO/Rh crossmatch verified compatible
+        '422':
+          description: Incompatible blood transfusion blocked
+
+  /pharmacy/narcotics/dispense:
+    post:
+      summary: NDPS Schedule X Dual-Witness Narcotic Dispensation
+      operationId: dispenseNarcotic
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [drug_id, batch_number, quantity, patient_id, order_id, primary_user_id, secondary_user_id]
+      responses:
+        '200':
+          description: Narcotic dispensed and perpetually ledgered
+        '403':
+          description: Dual-witness biometric authentication failure
+
+  /billing/pmjay/adjudicate:
+    post:
+      summary: Ayushman Bharat PM-JAY Bundled Package Anti-Breakage Adjudication
+      operationId: adjudicatePmjayCharge
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [encounter_id, patient_id, pmjay_card_id, package_code, item_name, category, amount_inr]
+      responses:
+        '200':
+          description: PM-JAY specialty add-on approved
+        '422':
+          description: Statutory package breakage blocked
+
+  /edge/leases/request:
+    post:
+      summary: Pessimistic Edge Resource Lease for 72h Offline Resilience
+      operationId: requestEdgeLease
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [node_id, resource_id, resource_type]
+      responses:
+        '200':
+          description: Exclusive edge lease granted
+        '409':
+          description: Resource lease conflict rejected
+
+  /clinical/partograph/record:
+    post:
+      summary: Digital WHO Partograph Observation & Action Line Alert
+      operationId: recordPartographObservation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [patient_id, hours_in_active_labor, cervical_dilatation_cm, fetal_heart_rate_bpm, contractions_per_10min]
+      responses:
+        '200':
+          description: Partograph observation recorded with action line alert status

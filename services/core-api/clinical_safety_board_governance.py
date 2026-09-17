@@ -49,7 +49,13 @@ class ClinicalSafetyBoardGovernanceEngine:
 
     def __init__(self, hospital_id: str = "HOSPITAL-AIIMS-01", **kwargs):
         self.hospital_id = kwargs.get("tenant_id", hospital_id)
-        self._secret_key = os.getenv("CSB_HMAC_SECRET", "CSB_HMAC_SECRET_KEY_2026")
+        env_mode = os.getenv("HOSPITAL_ENV", "development").lower()
+        secret = os.getenv("CSB_HMAC_SECRET")
+        if not secret:
+            if env_mode in ("production", "prod"):
+                raise RuntimeError("FATAL SECURITY EXCEPTION: CSB_HMAC_SECRET environment variable is required and must not be empty in production mode.")
+            secret = os.getenv("CSB_EPHEMERAL_DEV_SECRET") or os.urandom(32).hex()
+        self._secret_key = secret
         self._registered_members: Dict[str, Dict] = {}
         self._stage_authorizations: Dict[int, Dict] = {}
         self._emergency_pause_active: bool = False
@@ -102,8 +108,7 @@ class ClinicalSafetyBoardGovernanceEngine:
         scorecard_compliance_percent: float,
         secret_key: Optional[str] = None
     ) -> Dict:
-        """Issues an HMAC-SHA256 cryptographic authorization token required to unlock pilot stages."""
-        actual_secret = secret_key or os.getenv("CSB_HMAC_SECRET", "CSB_HMAC_SECRET_KEY_2026")
+        actual_secret = secret_key or self._secret_key
         if self._emergency_pause_active:
             raise EmergencySafetyPauseActiveError(
                 f"CANNOT AUTHORIZE STAGE {stage_number}: Clinical Safety Pause is currently ACTIVE! "

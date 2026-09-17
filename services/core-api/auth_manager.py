@@ -57,7 +57,13 @@ class AuthSecurityManager:
     """
 
     def __init__(self, jwt_secret: Optional[str] = None):
-        secret = jwt_secret or os.getenv("JWT_SECRET_KEY", "HOSPITAL_PROD_JWT_SECURE_KEY_2026_CHANGE_IN_VAULT")
+        env_mode = os.getenv("HOSPITAL_ENV", "development").lower()
+        secret = jwt_secret or os.getenv("JWT_SECRET_KEY")
+        if not secret:
+            if env_mode in ("production", "prod"):
+                raise RuntimeError("FATAL SECURITY EXCEPTION: JWT_SECRET_KEY environment variable is required and must not be empty in production mode.")
+            # In development/test mode, generate a secure random 32-byte ephemeral hex key per process to eliminate static committed fallbacks
+            secret = os.getenv("JWT_EPHEMERAL_DEV_SECRET") or os.urandom(32).hex()
         self._jwt_secret = secret.encode("utf-8") if isinstance(secret, str) else secret
         self._user_store: Dict[str, Dict[str, Any]] = {}
         self._initialize_default_credentials()
@@ -154,6 +160,7 @@ class AuthSecurityManager:
         role: str,
         permissions: List[str],
         expires_in_seconds: int = 28800,
+        standard_format: bool = False,
         **kwargs
     ) -> str:
         """Creates an authentic RFC 7519 compliant HMAC-SHA256 JWT."""
@@ -177,7 +184,11 @@ class AuthSecurityManager:
         sig = hmac.new(self._jwt_secret, message, hashlib.sha256).digest()
         sig_b64 = _b64url_encode(sig)
 
-        return f"JWT-{hdr_b64}.{pay_b64}.{sig_b64}"
+        raw_jwt = f"{hdr_b64}.{pay_b64}.{sig_b64}"
+        if standard_format or kwargs.get("prefix") == "":
+            return raw_jwt
+        prefix = kwargs.get("prefix", "JWT-")
+        return f"{prefix}{raw_jwt}"
 
     def decode_and_verify_token(self, token_str: str) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
         """

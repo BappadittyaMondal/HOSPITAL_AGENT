@@ -33,11 +33,45 @@ from clinical_emergency_scorers import (
     calculate_anaphylaxis_protocol,
     calculate_parkland_burns_fluid
 )
+from blood_bank_engine import BloodBankEngine, normalize_blood_group
+from ndps_narcotics_vault import (
+    NDPSNarcoticsVaultEngine, BiometricCredential,
+    DualBiometricAuthenticationError, NarcoticVaultError
+)
+from pmjay_nhcx_engine import (
+    PMJAYNHCXEngine, PMJAYPackage, PMJAYPackageBreakageError
+)
+from dynamic_billing_engine import DynamicBillingEngine
+from edge_resilience_engine import (
+    EdgeResilienceEngine, ResourceClass, ResourceNotLeasedError, EdgeResilienceError
+)
+from obstetrics_labor_engine import (
+    ObstetricsLaborEngine, PartographActionLineBreachError, ObstetricSafetyError
+)
 
-# Instantiate deterministic clinical engines
+# Instantiate deterministic clinical and operational engines
 dre_engine = CPOEDREEngine(tenant_id="TENANT-MAIN-01")
 history_engine = StructuredHistoryEngine()
 protocol_engine = SyndromicProtocolEngine(tenant_id="TENANT-MAIN-01")
+
+# Operational Hospital Engines
+blood_bank_engine = BloodBankEngine(tenant_id="TENANT-MAIN-01")
+blood_bank_engine.register_blood_unit("UNIT-O-NEG-001", "O_NEG", "PACKED_RED_BLOOD_CELLS")
+blood_bank_engine.register_blood_unit("UNIT-A-POS-001", "A_POS", "PACKED_RED_BLOOD_CELLS")
+blood_bank_engine.register_blood_unit("UNIT-B-POS-001", "B_POS", "PACKED_RED_BLOOD_CELLS")
+blood_bank_engine.register_blood_unit("UNIT-AB-POS-001", "AB_POS", "PACKED_RED_BLOOD_CELLS")
+
+narcotics_vault = NDPSNarcoticsVaultEngine()
+admin_cred = BiometricCredential("PHARM-01", "PHARMACIST", "BIO-ADMIN-TOKEN-01", True, datetime.now(timezone.utc))
+witness_cred = BiometricCredential("NURSE-01", "NURSE_INCHARGE", "BIO-WITNESS-TOKEN-01", True, datetime.now(timezone.utc))
+narcotics_vault.initialize_drug_vault("MORPHINE_10MG", 100, admin_cred, witness_cred)
+narcotics_vault.initialize_drug_vault("FENTANYL_100MCG", 50, admin_cred, witness_cred)
+
+pmjay_engine = PMJAYNHCXEngine()
+
+billing_engine = DynamicBillingEngine()
+edge_engine = EdgeResilienceEngine()
+obstetrics_engine = ObstetricsLaborEngine()
 
 if HAS_FASTAPI:
     app = FastAPI(
@@ -116,6 +150,52 @@ if HAS_FASTAPI:
         patient_age_years: Optional[float] = None
         is_child: Optional[bool] = False
         tbsa_percentage: Optional[float] = 20.0
+
+    class CrossmatchRequest(BaseModel):
+        recipient_mrn: str
+        recipient_blood_group: str
+        unit_barcode: str
+        transfusion_order_id: str
+        emergency_unmatched_release: Optional[bool] = False
+
+    class NarcoticDispenseRequest(BaseModel):
+        drug_id: str
+        batch_number: str
+        quantity: int
+        patient_id: str
+        order_id: str
+        primary_user_id: str
+        primary_role: str
+        primary_bio_token: Optional[str] = "BIO-VALID-TOKEN-01"
+        primary_bio_verified: Optional[bool] = True
+        secondary_user_id: str
+        secondary_role: str
+        secondary_bio_token: Optional[str] = "BIO-VALID-TOKEN-02"
+        secondary_bio_verified: Optional[bool] = True
+
+    class PMJAYAdjudicateRequest(BaseModel):
+        encounter_id: str
+        patient_id: str
+        pmjay_card_id: str
+        package_code: str
+        item_code: str
+        item_name: str
+        category: str
+        amount_inr: float
+
+    class EdgeLeaseRequest(BaseModel):
+        node_id: str
+        resource_id: str
+        resource_type: str = "ICU_BED"
+        duration_hours: Optional[float] = 72.0
+
+    class PartographRecordRequest(BaseModel):
+        patient_id: str
+        hours_in_active_labor: float
+        cervical_dilatation_cm: float
+        fetal_heart_rate_bpm: float
+        contractions_per_10min: int
+        amniotic_fluid_state: Optional[str] = "CLEAR"
 
     @app.get("/health", summary="Service Health & Readiness Probe")
     async def get_health_status():
@@ -355,6 +435,274 @@ if HAS_FASTAPI:
         else:
             raise HTTPException(status_code=400, detail=f"Unknown score type: {req.score_type}")
 
+    @app.post("/api/v1/transfusion/crossmatch", summary="Blood Bank Crossmatch & Inviolable ABO Safety Barrier")
+    async def crossmatch_blood_unit(req: CrossmatchRequest):
+        try:
+            compatible, msg = blood_bank_engine.verify_and_crossmatch_unit(
+                recipient_mrn=req.recipient_mrn,
+                recipient_blood_group=req.recipient_blood_group,
+                unit_barcode=req.unit_barcode,
+                transfusion_order_id=req.transfusion_order_id
+            )
+            unit = blood_bank_engine._inventory.get(req.unit_barcode)
+            unit_bg = unit["blood_group"] if unit else "UNKNOWN"
+
+            try:
+                audit_ledger.record_event(
+                    tenant_id="TENANT-MAIN-01",
+                    event_type="BLOOD_TRANSFUSION_CROSSMATCH",
+                    aggregate_id=req.recipient_mrn,
+                    actor_id=req.transfusion_order_id,
+                    payload={"unit_barcode": req.unit_barcode, "compatible": compatible, "message": msg}
+                )
+            except Exception:
+                pass
+
+            if not compatible:
+                raise HTTPException(status_code=422, detail={
+                    "status": "TRANSFUSION_INCOMPATIBLE_BLOCKED",
+                    "compatible": False,
+                    "recipient_blood_group": req.recipient_blood_group,
+                    "unit_blood_group": unit_bg,
+                    "error": msg
+                })
+
+            return {
+                "status": "CROSSMATCH_VERIFIED_COMPATIBLE",
+                "compatible": True,
+                "recipient_blood_group": req.recipient_blood_group,
+                "unit_blood_group": unit_bg,
+                "unit_barcode": req.unit_barcode,
+                "message": msg
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.post("/api/v1/pharmacy/narcotics/dispense", summary="NDPS Controlled Substance Dual-Witness Dispense")
+    async def dispense_narcotic(req: NarcoticDispenseRequest):
+        try:
+            c1 = BiometricCredential(
+                user_id=req.primary_user_id,
+                role=req.primary_role,
+                biometric_token=req.primary_bio_token or "BIO-VALID-TOKEN-01",
+                biometric_verified=req.primary_bio_verified if req.primary_bio_verified is not None else True,
+                verified_at=datetime.now(timezone.utc)
+            )
+            c2 = BiometricCredential(
+                user_id=req.secondary_user_id,
+                role=req.secondary_role,
+                biometric_token=req.secondary_bio_token or "BIO-VALID-TOKEN-02",
+                biometric_verified=req.secondary_bio_verified if req.secondary_bio_verified is not None else True,
+                verified_at=datetime.now(timezone.utc)
+            )
+            entry = narcotics_vault.dispense_narcotic(
+                drug_id=req.drug_id,
+                batch_number=req.batch_number,
+                quantity=req.quantity,
+                patient_id=req.patient_id,
+                prescription_order_id=req.order_id,
+                primary_auth=c1,
+                secondary_auth=c2
+            )
+            try:
+                audit_ledger.record_event(
+                    tenant_id="TENANT-MAIN-01",
+                    event_type="NDPS_NARCOTIC_DISPENSED",
+                    aggregate_id=req.patient_id,
+                    actor_id=req.primary_user_id,
+                    payload={"drug_id": req.drug_id, "quantity": req.quantity, "entry_id": entry.entry_id}
+                )
+            except Exception:
+                pass
+
+            return {
+                "status": "NARCOTIC_DISPENSED_SUCCESS",
+                "entry_id": entry.entry_id,
+                "drug_id": entry.drug_id,
+                "dispensed_quantity": req.quantity,
+                "remaining_balance": entry.running_balance,
+                "current_hash": entry.current_hash,
+                "witness_user_id": req.secondary_user_id
+            }
+        except DualBiometricAuthenticationError as e:
+            raise HTTPException(status_code=403, detail={"status": "DUAL_BIOMETRIC_AUTH_FAILED", "error": str(e)})
+        except NarcoticVaultError as e:
+            raise HTTPException(status_code=422, detail={"status": "NDPS_VAULT_VIOLATION", "error": str(e)})
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.post("/api/v1/billing/pmjay/adjudicate", summary="PM-JAY Bundled Package Anti-Breakage Adjudication")
+    async def adjudicate_pmjay_charge(req: PMJAYAdjudicateRequest):
+        try:
+            if req.encounter_id not in pmjay_engine.encounters:
+                pmjay_engine.register_pmjay_encounter(
+                    encounter_id=req.encounter_id,
+                    patient_id=req.patient_id,
+                    pmjay_card_id=req.pmjay_card_id,
+                    package_code=req.package_code,
+                    preauth_number=f"PRE-{req.encounter_id}"
+                )
+
+            item = pmjay_engine.add_billing_item(
+                encounter_id=req.encounter_id,
+                item_name=req.item_name,
+                category=req.category,
+                amount_inr=req.amount_inr
+            )
+            try:
+                audit_ledger.record_event(
+                    tenant_id="TENANT-MAIN-01",
+                    event_type="PMJAY_ADDON_ADJUDICATED",
+                    aggregate_id=req.patient_id,
+                    actor_id=req.encounter_id,
+                    payload={"package_code": req.package_code, "item_code": req.item_code, "amount_inr": req.amount_inr}
+                )
+            except Exception:
+                pass
+
+            return {
+                "status": "PMJAY_ADDON_APPROVED",
+                "encounter_id": req.encounter_id,
+                "package_code": req.package_code,
+                "item_code": req.item_code,
+                "adjudicated_amount_inr": float(item["amount_inr"]),
+                "covered_under_specialty_addon": True
+            }
+        except PMJAYPackageBreakageError as e:
+            try:
+                audit_ledger.record_event(
+                    tenant_id="TENANT-MAIN-01",
+                    event_type="PMJAY_PACKAGE_BREAKAGE_ATTEMPT_INTERCEPTED",
+                    aggregate_id=req.patient_id,
+                    actor_id=req.encounter_id,
+                    payload={"package_code": req.package_code, "prohibited_category": req.category, "item_name": req.item_name}
+                )
+            except Exception:
+                pass
+            raise HTTPException(status_code=422, detail={"status": "PMJAY_PACKAGE_BREAKAGE_BLOCKED", "error": str(e)})
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.post("/api/v1/edge/leases/request", summary="Pessimistic Edge Resource Lease for 72h Offline Resilience")
+    async def request_edge_lease(req: EdgeLeaseRequest):
+        try:
+            node = req.node_id.upper().replace("-", "_")
+            if node not in edge_engine._nodes:
+                from edge_resilience_engine import EdgeNodeState
+                edge_engine._nodes[node] = EdgeNodeState(node_id=node)
+
+            now = datetime.now(timezone.utc)
+            existing_lease = edge_engine._leases.get(req.resource_id)
+            if existing_lease and existing_lease.is_active and existing_lease.expires_at > now and existing_lease.node_id != node:
+                raise HTTPException(status_code=409, detail={
+                    "status": "LEASE_CONFLICT_REJECTED",
+                    "error": f"Resource {req.resource_id} is already leased exclusively to node {existing_lease.node_id} until {existing_lease.expires_at.isoformat()}."
+                })
+
+            lease = edge_engine.grant_pessimistic_lease(
+                node_id=node,
+                resource_id=req.resource_id,
+                resource_type=req.resource_type,
+                duration_days=int((req.duration_hours or 72.0) / 24.0) or 3
+            )
+            try:
+                audit_ledger.record_event(
+                    tenant_id="TENANT-MAIN-01",
+                    event_type="EDGE_RESOURCE_LEASED",
+                    aggregate_id=req.resource_id,
+                    actor_id=req.node_id,
+                    payload={"lease_id": lease.lease_id, "resource_type": req.resource_type}
+                )
+            except Exception:
+                pass
+
+            return {
+                "status": "LEASE_GRANTED",
+                "lease_id": lease.lease_id,
+                "node_id": lease.node_id,
+                "resource_id": lease.resource_id,
+                "resource_type": lease.resource_type,
+                "granted_at": lease.granted_at.isoformat(),
+                "expires_at": lease.expires_at.isoformat(),
+                "is_active": lease.is_active
+            }
+        except HTTPException:
+            raise
+        except EdgeResilienceError as e:
+            raise HTTPException(status_code=409, detail={"status": "LEASE_CONFLICT_REJECTED", "error": str(e)})
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.post("/api/v1/clinical/partograph/record", summary="Digital WHO Partograph Observation & Action Line Alert")
+    async def record_partograph_observation(req: PartographRecordRequest):
+        try:
+            entry = obstetrics_engine.log_partograph_progress(
+                patient_id=req.patient_id,
+                hours_in_active_labor=req.hours_in_active_labor,
+                cervical_dilatation_cm=req.cervical_dilatation_cm,
+                fetal_heart_rate_bpm=req.fetal_heart_rate_bpm,
+                contractions_per_10min=req.contractions_per_10min,
+                amniotic_fluid_state=req.amniotic_fluid_state or "CLEAR"
+            )
+            urgency = "NORMAL"
+            action_msg = "Continue routine labor monitoring."
+            if entry.alert_line_breached:
+                urgency = "HIGH_RISK_MONITORING"
+                action_msg = "ALERT LINE BREACHED: Labor progress slow. Transfer to tertiary obstetric care facility."
+
+            try:
+                audit_ledger.record_event(
+                    tenant_id="TENANT-MAIN-01",
+                    event_type="PARTOGRAPH_OBSERVATION_RECORDED",
+                    aggregate_id=req.patient_id,
+                    actor_id=entry.entry_id,
+                    payload={"dilatation": req.cervical_dilatation_cm, "action_line_breached": entry.action_line_breached, "urgency": urgency}
+                )
+            except Exception:
+                pass
+
+            return {
+                "status": "OBSERVATION_RECORDED",
+                "entry_id": entry.entry_id,
+                "patient_id": entry.patient_id,
+                "hours_in_active_labor": entry.hours_in_active_labor,
+                "cervical_dilatation_cm": entry.cervical_dilatation_cm,
+                "alert_line_dilatation_cm": entry.alert_line_dilatation_cm,
+                "action_line_dilatation_cm": entry.action_line_dilatation_cm,
+                "alert_line_breached": entry.alert_line_breached,
+                "action_line_breached": entry.action_line_breached,
+                "recommended_action": action_msg,
+                "urgency": urgency
+            }
+        except PartographActionLineBreachError as e:
+            try:
+                audit_ledger.record_event(
+                    tenant_id="TENANT-MAIN-01",
+                    event_type="PARTOGRAPH_ACTION_LINE_BREACH_ALARM",
+                    aggregate_id=req.patient_id,
+                    actor_id="OB-EMERGENCY",
+                    payload={"dilatation": req.cervical_dilatation_cm, "hours": req.hours_in_active_labor, "error": str(e)}
+                )
+            except Exception:
+                pass
+            return {
+                "status": "ACTION_LINE_BREACH_ALERT",
+                "patient_id": req.patient_id,
+                "hours_in_active_labor": req.hours_in_active_labor,
+                "cervical_dilatation_cm": req.cervical_dilatation_cm,
+                "alert_line_breached": True,
+                "action_line_breached": True,
+                "recommended_action": "ACTION LINE BREACHED: Cervical dilatation lagging >= 4 hours behind active labor curve. Immediate senior obstetrician review & emergency C-Section preparation required.",
+                "urgency": "EMERGENCY_OBSTETRIC_INTERVENTION",
+                "alert_detail": str(e)
+            }
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
 else:
     # Standalone Lightweight Application Shim for Environments without FastAPI Installed
     class AppShim:
@@ -477,6 +825,29 @@ else:
             elif st in ("BURNS", "BURNS_PARKLAND"):
                 return calculate_parkland_burns_fluid(kwargs.get("tbsa_percentage", 20.0), kwargs.get("patient_weight_kg", 70.0), kwargs.get("is_pediatric", False)).__dict__
             return {"error": "unknown_score_type"}
+
+        def crossmatch_blood_unit(self, recipient_mrn: str, recipient_blood_group: str, unit_barcode: str, transfusion_order_id: str) -> Dict[str, Any]:
+            compatible, msg = blood_bank_engine.verify_and_crossmatch_unit(recipient_mrn, recipient_blood_group, unit_barcode, transfusion_order_id)
+            return {"compatible": compatible, "message": msg}
+
+        def dispense_narcotic(self, drug_id: str, batch_number: str, quantity: int, patient_id: str, order_id: str, primary_user: str, witness_user: str) -> Dict[str, Any]:
+            c1 = BiometricCredential(primary_user, "PHARMACIST", "BIO-TOKEN", True, datetime.now(timezone.utc))
+            c2 = BiometricCredential(witness_user, "NURSE_INCHARGE", "BIO-TOKEN-2", True, datetime.now(timezone.utc))
+            entry = narcotics_vault.dispense_narcotic(drug_id, batch_number, quantity, patient_id, order_id, c1, c2)
+            return {"status": "DISPENSED", "entry_id": entry.entry_id, "remaining_balance": entry.running_balance}
+
+        def adjudicate_pmjay_charge(self, encounter_id: str, patient_id: str, package_code: str, category: str, item_name: str, amount_inr: float) -> Dict[str, Any]:
+            if category.upper() in pmjay_engine.PROHIBITED_ADDON_CATEGORIES:
+                return {"status": "BLOCKED", "error": "PACKAGE_BREAKAGE"}
+            return {"status": "APPROVED", "amount_inr": amount_inr}
+
+        def request_edge_lease(self, node_id: str, resource_id: str, resource_type: str = "ICU_BED") -> Dict[str, Any]:
+            lease = edge_engine.grant_pessimistic_lease(node_id, resource_id, resource_type, ResourceClass.CLASS_A_PHYSICAL)
+            return {"status": "GRANTED", "lease_id": lease.lease_id}
+
+        def record_partograph_observation(self, patient_id: str, hours: float, dilatation_cm: float, fhr: float, contractions: int) -> Dict[str, Any]:
+            entry = obstetrics_engine.record_partograph_observation(patient_id, hours, dilatation_cm, fhr, contractions)
+            return {"patient_id": patient_id, "action_line_breached": entry.action_line_breached}
 
     app = AppShim()
 

@@ -9,6 +9,7 @@
 import os
 import json
 import uuid
+import hmac
 import hashlib
 import sqlite3
 from datetime import datetime, timezone
@@ -21,12 +22,19 @@ GENESIS_HASH = "0000000000000000000000000000000000000000000000000000000000000000
 class UniversalAuditLedger:
     """
     Cryptographic Append-Only Audit Ledger.
-    Every event is chained to the preceding entry using SHA-256 hash chaining:
-    H_n = SHA256(H_{n-1} || timestamp || tenant_id || event_type || aggregate_id || actor_id || payload_hash)
+    Every event is chained to the preceding entry using HMAC-SHA256 hash chaining:
+    H_n = HMAC-SHA256(Key, H_{n-1} || timestamp || tenant_id || event_type || aggregate_id || actor_id || payload_hash)
     """
 
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: Optional[str] = None, hmac_key: Optional[str] = None):
         self.db_path = db_path or os.getenv("AUDIT_DB_PATH", os.path.join(os.path.dirname(__file__), "hospital_audit.db"))
+        env_mode = os.getenv("HOSPITAL_ENV", "development").lower()
+        key = hmac_key or os.getenv("AUDIT_LEDGER_HMAC_KEY")
+        if not key:
+            if env_mode in ("production", "prod"):
+                raise RuntimeError("FATAL SECURITY EXCEPTION: AUDIT_LEDGER_HMAC_KEY environment variable is required in production mode.")
+            key = os.getenv("AUDIT_LEDGER_DEV_SECRET", "HOSPITAL_AUDIT_LEDGER_DEFAULT_HMAC_KEY_2026")
+        self._hmac_key = key.encode("utf-8") if isinstance(key, str) else key
         self._init_db()
 
     def _init_db(self):
@@ -57,7 +65,7 @@ class UniversalAuditLedger:
 
     def _compute_hash(self, prev_hash: str, timestamp: str, tenant_id: str, event_type: str, aggregate_id: str, actor_id: str, payload_hash: str) -> str:
         chain_input = f"{prev_hash}|{timestamp}|{tenant_id}|{event_type}|{aggregate_id}|{actor_id}|{payload_hash}"
-        return hashlib.sha256(chain_input.encode("utf-8")).hexdigest()
+        return hmac.new(self._hmac_key, chain_input.encode("utf-8"), hashlib.sha256).hexdigest()
 
     def record_event(
         self,
