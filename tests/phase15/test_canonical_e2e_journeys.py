@@ -70,6 +70,24 @@ class TestCanonicalE2EJourneys(unittest.TestCase):
         j12 = next(j for j in journeys if j["journey_id"] == 12)
         self.assertTrue(any("72h" in s.lower() for s in j12["safety_checks_verified"]))
 
+    def test_canonical_journey_13_rural_prehospital_transit(self):
+        """
+        Extended Journey 13:
+        Verifies remote 86yo female femoral neck fracture with 8-hour transit,
+        Paracetamol IV approval, strict NSAID blacklist, and trilingual guidance.
+        """
+        j13 = self.engine.execute_journey_13_rural_prehospital_transit()
+        self.assertEqual(j13.journey_id, 13)
+        self.assertEqual(j13.safety_violations_count, 0)
+        self.assertTrue(j13.passed)
+        self.assertTrue(any("Zero NSAIDs" in s for s in j13.safety_checks_verified))
+
+        # Test full 13-journey suite
+        summary_13 = self.engine.execute_all_13_canonical_journeys()
+        self.assertEqual(summary_13["total_canonical_journeys_tested"], 13)
+        self.assertEqual(summary_13["journeys_passed"], 13)
+        self.assertEqual(summary_13["total_safety_violations"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

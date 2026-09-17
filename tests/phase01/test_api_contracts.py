@@ -82,6 +82,38 @@ def test_openapi_contract():
             }, headers={"X-Tenant-ID": "TENANT-001"})
             assert r_safe.status_code == 200 and r_safe.json()["status"] == "APPROVED"
             print(" [PASS] Live ASGI /api/v1/safety/evaluate-order verified.")
+
+            # Verify Phase 18 Rural Pre-Hospital Endpoints
+            r_hist = client.post("/api/v1/triage/history-intake", json={
+                "session_id": "TEST-SESS-01",
+                "patient_id": "PAT-01",
+                "chief_complaint": "CHEST_PAIN",
+                "patient_age": 55,
+                "is_female": False,
+                "answers": {"has_cold_sweating": True, "pain_severity_1_to_10": 8}
+            })
+            assert r_hist.status_code == 200 and "active_red_flags" in r_hist.json()
+            print(" [PASS] Live ASGI /api/v1/triage/history-intake verified.")
+
+            r_plan = client.post("/api/v1/triage/syndromic-holding-plan", json={
+                "patient_id": "PAT-01",
+                "syndrome": "ACUTE_CORONARY_SYNDROME",
+                "patient_age": 55,
+                "is_female": False,
+                "patient_weight_kg": 70.0,
+                "vitals": {"systolic_bp": 120.0, "spo2": 98.0}
+            })
+            assert r_plan.status_code == 200 and "supportive_medications" in r_plan.json()
+            print(" [PASS] Live ASGI /api/v1/triage/syndromic-holding-plan verified.")
+
+            r_score = client.post("/api/v1/clinical/emergency-scores", json={
+                "score_type": "GCS",
+                "eye_score": 4,
+                "verbal_score": 5,
+                "motor_score": 6
+            })
+            assert r_score.status_code == 200 and r_score.json()["total_gcs"] == 15
+            print(" [PASS] Live ASGI /api/v1/clinical/emergency-scores verified.")
     except Exception as e:
         print(f" [FAIL] ASGI application verification failed: {e}")
         return 1
