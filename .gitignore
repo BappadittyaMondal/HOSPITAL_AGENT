@@ -1,0 +1,53 @@
+# Environment & Secrets
+.env
+.env.local
+*.pem
+*.key
+*.cert
+*.pfx
+
+# Dependency directories
+node_modules/
+vendor/
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+target/
+
+# Build artifacts
+dist/
+build/
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+*.out
+
+# IDE and Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Logs & DB Data
+*.log
+logs/
+pgdata/
+redpandadata/
+redisdata/
+miniodata/
+orthancdata/
+
+# Test coverage & reports
+coverage/
+.nyc_output/
+.coverage
+htmlcov/
+sbom.json

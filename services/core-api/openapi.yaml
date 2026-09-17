@@ -1,0 +1,160 @@
+openapi: 3.1.0
+info:
+  title: HOSPITAL Core Platform API
+  description: Zero-Trust End-to-End Hospital Information System (HIS) API
+  version: 1.0.0
+  contact:
+    name: Hospital Platform Architecture Group
+servers:
+  - url: /api/v1
+    description: Core API v1 Production Endpoint
+
+paths:
+  /health:
+    get:
+      summary: Service Health & Readiness Probe
+      operationId: getHealthStatus
+      responses:
+        '200':
+          description: Service is healthy and connected to DB/Redis
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, timestamp, version, services]
+                properties:
+                  status:
+                    type: string
+                    enum: [healthy, degraded, unhealthy]
+                  timestamp:
+                    type: string
+                    format: date-time
+                  version:
+                    type: string
+                  services:
+                    type: object
+                    required: [postgres, redis, safety_engine]
+                    properties:
+                      postgres:
+                        type: string
+                      redis:
+                        type: string
+                      safety_engine:
+                        type: string
+
+  /auth/token:
+    post:
+      summary: Authenticate Clinical Staff & Issue Contextual JWT
+      operationId: authenticateStaff
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password, tenant_id]
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+                tenant_id:
+                  type: string
+                  format: uuid
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, expires_in, role, permissions]
+                properties:
+                  token:
+                    type: string
+                  expires_in:
+                    type: integer
+                  role:
+                    type: string
+                  permissions:
+                    type: array
+                    items:
+                      type: string
+
+  /safety/evaluate-order:
+    post:
+      summary: Sub-millisecond DRE Clinical Safety Verification
+      operationId: evaluateClinicalOrder
+      parameters:
+        - in: header
+          name: X-Tenant-ID
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [patient_id, clinician_id, order_type, items]
+              properties:
+                patient_id:
+                  type: string
+                  format: uuid
+                clinician_id:
+                  type: string
+                  format: uuid
+                order_type:
+                  type: string
+                  enum: [MEDICATION, LAB, RADIOLOGY, PROCEDURE]
+                items:
+                  type: array
+                  items:
+                    type: object
+                    required: [code, name]
+                    properties:
+                      code:
+                        type: string
+                      name:
+                        type: string
+                      dose:
+                        type: string
+                      route:
+                        type: string
+      responses:
+        '200':
+          description: Safety evaluation result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, hard_stops, warnings, evaluated_in_microseconds]
+                properties:
+                  status:
+                    type: string
+                    enum: [APPROVED, BLOCKED, WARNING_REQUIRES_OVERRIDE]
+                  hard_stops:
+                    type: array
+                    items:
+                      type: object
+                      required: [rule_id, message, severity]
+                      properties:
+                        rule_id:
+                          type: string
+                        message:
+                          type: string
+                        severity:
+                          type: string
+                  warnings:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        rule_id:
+                          type: string
+                        message:
+                          type: string
+                  evaluated_in_microseconds:
+                    type: number

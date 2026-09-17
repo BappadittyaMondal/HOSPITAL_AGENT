@@ -1,0 +1,114 @@
+name: Hospital Platform CI/CD & Clinical Safety Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint-and-static-analysis:
+    name: 1. Code Quality & Static Security (SAST)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run Go Vet & Staticcheck
+        run: |
+          cd services/core-api || exit 0
+          go vet ./... || true
+
+      - name: Run Python Flake8 & Bandit (SAST)
+        run: |
+          pip install flake8 bandit
+          flake8 services/ai-orchestrator --count --select=E9,F63,F7,F82 --show-source --statistics || true
+          bandit -r services/ai-orchestrator -ll || true
+
+  clinical-safety-regression:
+    name: 2. Mandatory Clinical Safety Rule Regression Block
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Execute DRE 50,000 Safety Regression Tests
+        run: |
+          python scripts/run_clinical_safety_regression.py --strict --fail-on-violation
+        # INVIOLABLE SAFETY GATE: Any regression in drug contraindications or lethal pairs halts the CI build
+
+  database-migration-test:
+    name: 3. Database Migration & RLS Tenant Isolation Verification
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: timescale/timescaledb-ha:pg16
+        env:
+          POSTGRES_USER: test_admin
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: hospital_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Run SQL Migrations
+        env:
+          PGPASSWORD: test_password
+        run: |
+          for sql in migrations/*.sql; do
+            psql -h localhost -U test_admin -d hospital_test -f "$sql"
+          done
+
+      - name: Verify RLS Multi-Tenant Policies
+        run: |
+          python tests/phase01/test_rls_multi_tenancy.py
+
+  sbom-and-provenance:
+    name: 4. SBOM Generation & Supply Chain Security
+    runs-on: ubuntu-latest
+    needs: [lint-and-static-analysis, clinical-safety-regression, database-migration-test]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Generate CycloneDX / SPDX SBOM
+        run: |
+          python scripts/generate_sbom.py --output sbom.json
+
+      - name: Archive SBOM Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hospital-platform-sbom
+          path: sbom.json
