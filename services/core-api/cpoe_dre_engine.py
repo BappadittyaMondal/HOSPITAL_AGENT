@@ -89,10 +89,15 @@ class CPOEDREEngine:
         if drug_lower in LIFETIME_TOXICITY_LIMITS:
             limit_data = LIFETIME_TOXICITY_LIMITS[drug_lower]
             prior_dose = self._patient_lifetime_doses.get(patient_id, {}).get(drug_lower, 0.0)
-            attempted_dose_m2 = prescribed_dose / patient_bsa_m2 if patient_bsa_m2 > 0 else prescribed_dose
-            new_total = prior_dose + attempted_dose_m2
-
-            max_allowed = limit_data.get("max_lifetime_mg_m2") or limit_data.get("max_lifetime_units", 9999)
+            if "max_lifetime_units" in limit_data:
+                # Cumulative absolute units (e.g. Bleomycin: 400 units ceiling)
+                attempted_dose = prescribed_dose
+                max_allowed = limit_data["max_lifetime_units"]
+            else:
+                # Cumulative BSA-normalized dose in mg/m2 (e.g. Doxorubicin: 450 mg/m2 ceiling)
+                attempted_dose = prescribed_dose / patient_bsa_m2 if patient_bsa_m2 > 0 else prescribed_dose
+                max_allowed = limit_data.get("max_lifetime_mg_m2", 9999.0)
+            new_total = prior_dose + attempted_dose
             if new_total > max_allowed:
                 hard_stops.append(
                     f"CUMULATIVE TOXICITY CEILING EXCEEDED: {drug_name} lifetime total would reach {new_total:.1f} "

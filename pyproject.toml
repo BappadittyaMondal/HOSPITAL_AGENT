@@ -1,0 +1,38 @@
+﻿[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hospital-platform"
+version = "1.0.0"
+description = "Zero-Trust, Production-Grade Hospital Information System (HIS), EHR & Multi-Agent CDSS"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "Hospital Engineering Team" }]
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.31.0",
+    "pydantic>=2.9.2",
+    "pydantic-settings>=2.5.2",
+    "sqlalchemy>=2.0.35",
+    "asyncpg>=0.29.0",
+    "redis>=5.1.0",
+    "cryptography>=43.0.1",
+    "pyjwt>=2.9.0",
+    "pyyaml>=6.0.2"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.3",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.27.2"
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"

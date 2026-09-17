@@ -9,6 +9,7 @@ Purpose: Orchestrates and audits the 30-Day Supervised Clinical Pilot across all
 ====================================================================================================
 """
 
+import math
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -21,6 +22,24 @@ class PilotSurveillanceException(Exception):
 class PilotGateThresholdDeficitError(PilotSurveillanceException):
     """Raised when a pilot stage fails to meet mandatory safety thresholds for graduation."""
     pass
+
+
+def _validate_non_negative_int(val: int, name: str) -> int:
+    if not isinstance(val, int) or isinstance(val, bool):
+        raise PilotSurveillanceException(f"Invalid {name}: must be an integer, got {type(val).__name__}")
+    if val < 0:
+        raise PilotSurveillanceException(f"Invalid {name}: value {val} cannot be negative")
+    return val
+
+
+def _validate_non_negative_float(val: float, name: str) -> float:
+    if not isinstance(val, (int, float)) or isinstance(val, bool):
+        raise PilotSurveillanceException(f"Invalid {name}: must be numeric, got {type(val).__name__}")
+    if math.isnan(val) or math.isinf(val):
+        raise PilotSurveillanceException(f"Invalid {name}: value cannot be NaN or Infinite")
+    if val < 0.0:
+        raise PilotSurveillanceException(f"Invalid {name}: value {val} cannot be negative")
+    return float(val)
 
 
 class SupervisedClinicalPilotEngine:
@@ -44,9 +63,24 @@ class SupervisedClinicalPilotEngine:
         smart_paper_qr_scans_successful: int
     ) -> Dict:
         """Records Stage 1 shadow mode metrics comparing physical paper charts to digital entries."""
+        total_shadow_encounters = _validate_non_negative_int(total_shadow_encounters, "total_shadow_encounters")
+        discrepant_encounters = _validate_non_negative_int(discrepant_encounters, "discrepant_encounters")
+        smart_paper_qr_scans_successful = _validate_non_negative_int(smart_paper_qr_scans_successful, "smart_paper_qr_scans_successful")
+
+        if discrepant_encounters > total_shadow_encounters:
+            raise PilotSurveillanceException(
+                f"INVARIANT BREACH: Discrepant encounters ({discrepant_encounters}) cannot exceed total encounters ({total_shadow_encounters})."
+            )
+        if smart_paper_qr_scans_successful > total_shadow_encounters:
+            raise PilotSurveillanceException(
+                f"INVARIANT BREACH: Successful QR scans ({smart_paper_qr_scans_successful}) cannot exceed total encounters ({total_shadow_encounters})."
+            )
+
         if total_shadow_encounters == 0:
-            discrepancy_rate = 0.0
+            evidence_status = "INSUFFICIENT_EVIDENCE"
+            discrepancy_rate = 100.0
         else:
+            evidence_status = "ADEQUATE_EVIDENCE"
             discrepancy_rate = (discrepant_encounters / total_shadow_encounters) * 100.0
 
         metrics = {
@@ -54,6 +88,7 @@ class SupervisedClinicalPilotEngine:
             "discrepant_encounters": discrepant_encounters,
             "discrepancy_rate_percent": round(discrepancy_rate, 2),
             "qr_scans_successful": smart_paper_qr_scans_successful,
+            "evidence_status": evidence_status,
             "recorded_at": datetime.now(timezone.utc).isoformat()
         }
         self._stage_metrics[1]["metrics"] = metrics
@@ -66,12 +101,28 @@ class SupervisedClinicalPilotEngine:
         temp_id_generation_p99_ms: float
     ) -> Dict:
         """Records Stage 2 Emergency Department triage and financial decoupling metrics."""
-        compliance_pct = 100.0 if total_trauma_arrivals == 0 else (bypassed_cashier_promptly / total_trauma_arrivals) * 100.0
+        total_trauma_arrivals = _validate_non_negative_int(total_trauma_arrivals, "total_trauma_arrivals")
+        bypassed_cashier_promptly = _validate_non_negative_int(bypassed_cashier_promptly, "bypassed_cashier_promptly")
+        temp_id_generation_p99_ms = _validate_non_negative_float(temp_id_generation_p99_ms, "temp_id_generation_p99_ms")
+
+        if bypassed_cashier_promptly > total_trauma_arrivals:
+            raise PilotSurveillanceException(
+                f"INVARIANT BREACH: Bypassed cashier arrivals ({bypassed_cashier_promptly}) cannot exceed total arrivals ({total_trauma_arrivals})."
+            )
+
+        if total_trauma_arrivals == 0:
+            evidence_status = "INSUFFICIENT_EVIDENCE"
+            compliance_pct = 0.0
+        else:
+            evidence_status = "ADEQUATE_EVIDENCE"
+            compliance_pct = (bypassed_cashier_promptly / total_trauma_arrivals) * 100.0
+
         metrics = {
             "total_trauma_arrivals": total_trauma_arrivals,
             "bypassed_cashier": bypassed_cashier_promptly,
             "financial_decoupling_compliance_percent": round(compliance_pct, 2),
             "temp_id_p99_ms": temp_id_generation_p99_ms,
+            "evidence_status": evidence_status,
             "recorded_at": datetime.now(timezone.utc).isoformat()
         }
         self._stage_metrics[2]["metrics"] = metrics
@@ -85,13 +136,30 @@ class SupervisedClinicalPilotEngine:
         npo_meals_dispatched_to_patient: int
     ) -> Dict:
         """Records Stage 3 bedside eMAR and kitchen NPO safety metrics."""
-        scan_rate = 100.0 if total_emar_administrations == 0 else (dual_wristband_scanned / total_emar_administrations) * 100.0
+        total_emar_administrations = _validate_non_negative_int(total_emar_administrations, "total_emar_administrations")
+        dual_wristband_scanned = _validate_non_negative_int(dual_wristband_scanned, "dual_wristband_scanned")
+        npo_meal_attempts_blocked = _validate_non_negative_int(npo_meal_attempts_blocked, "npo_meal_attempts_blocked")
+        npo_meals_dispatched_to_patient = _validate_non_negative_int(npo_meals_dispatched_to_patient, "npo_meals_dispatched_to_patient")
+
+        if dual_wristband_scanned > total_emar_administrations:
+            raise PilotSurveillanceException(
+                f"INVARIANT BREACH: Dual wristband scanned doses ({dual_wristband_scanned}) cannot exceed total eMAR administrations ({total_emar_administrations})."
+            )
+
+        if total_emar_administrations == 0:
+            evidence_status = "INSUFFICIENT_EVIDENCE"
+            scan_rate = 0.0
+        else:
+            evidence_status = "ADEQUATE_EVIDENCE"
+            scan_rate = (dual_wristband_scanned / total_emar_administrations) * 100.0
+
         metrics = {
             "total_emar_doses": total_emar_administrations,
             "dual_wristband_scanned": dual_wristband_scanned,
             "emar_barcode_scan_percent": round(scan_rate, 2),
             "npo_blocked_attempts": npo_meal_attempts_blocked,
             "npo_leak_count": npo_meals_dispatched_to_patient,
+            "evidence_status": evidence_status,
             "recorded_at": datetime.now(timezone.utc).isoformat()
         }
         self._stage_metrics[3]["metrics"] = metrics
@@ -105,13 +173,32 @@ class SupervisedClinicalPilotEngine:
         retained_sponge_discrepancies_at_closure: int
     ) -> Dict:
         """Records Stage 4 ICU telemetry and OT WHO checklist surgical count metrics."""
-        alarm_sla_rate = 100.0 if total_sepsis_events == 0 else (sepsis_alarms_under_5s / total_sepsis_events) * 100.0
+        total_sepsis_events = _validate_non_negative_int(total_sepsis_events, "total_sepsis_events")
+        sepsis_alarms_under_5s = _validate_non_negative_int(sepsis_alarms_under_5s, "sepsis_alarms_under_5s")
+        surgical_cases_completed = _validate_non_negative_int(surgical_cases_completed, "surgical_cases_completed")
+        retained_sponge_discrepancies_at_closure = _validate_non_negative_int(
+            retained_sponge_discrepancies_at_closure, "retained_sponge_discrepancies_at_closure"
+        )
+
+        if sepsis_alarms_under_5s > total_sepsis_events:
+            raise PilotSurveillanceException(
+                f"INVARIANT BREACH: Sub-5s alarms ({sepsis_alarms_under_5s}) cannot exceed total sepsis events ({total_sepsis_events})."
+            )
+
+        if total_sepsis_events == 0:
+            evidence_status = "INSUFFICIENT_EVIDENCE"
+            alarm_sla_rate = 0.0
+        else:
+            evidence_status = "ADEQUATE_EVIDENCE"
+            alarm_sla_rate = (sepsis_alarms_under_5s / total_sepsis_events) * 100.0
+
         metrics = {
             "total_sepsis_events": total_sepsis_events,
             "alarms_under_5s": sepsis_alarms_under_5s,
             "alarm_sla_compliance_percent": round(alarm_sla_rate, 2),
             "surgical_cases": surgical_cases_completed,
             "retained_foreign_objects": retained_sponge_discrepancies_at_closure,
+            "evidence_status": evidence_status,
             "recorded_at": datetime.now(timezone.utc).isoformat()
         }
         self._stage_metrics[4]["metrics"] = metrics
@@ -123,14 +210,28 @@ class SupervisedClinicalPilotEngine:
         csb_auth_token: str
     ) -> Dict:
         """Advances the pilot to the next stage, strictly enforcing clinical gate thresholds."""
-        if not csb_auth_token or not csb_auth_token.startswith(f"CSB-AUTH-STAGE-{from_stage}"):
+        if from_stage != self._current_stage:
+            raise PilotSurveillanceException(
+                f"GOVERNANCE HARD-STOP: Out-of-order stage transition. Current active stage is {self._current_stage}, cannot advance from stage {from_stage}."
+            )
+
+        if not csb_auth_token or not isinstance(csb_auth_token, str) or not csb_auth_token.startswith(f"CSB-AUTH-STAGE-{from_stage}") or len(csb_auth_token.strip()) < 18:
             raise PilotSurveillanceException(
                 f"GOVERNANCE HARD-STOP: Advancing from Stage {from_stage} requires valid CSB authorization token."
             )
 
         metrics = self._stage_metrics[from_stage].get("metrics", {})
+        if not metrics:
+            raise PilotSurveillanceException(
+                f"GOVERNANCE HARD-STOP: No metrics recorded for Stage {from_stage}. Cannot advance unmonitored stage."
+            )
 
-        # Stage 1 Gate: Discrepancy rate < 1.0%
+        if metrics.get("evidence_status") == "INSUFFICIENT_EVIDENCE":
+            raise PilotGateThresholdDeficitError(
+                f"STAGE {from_stage} GATE FAILED: Zero observations recorded (INSUFFICIENT_EVIDENCE). Minimum observation quota required."
+            )
+
+        # Stage 1 Gate: Discrepancy rate <= 1.0%
         if from_stage == 1:
             disc_rate = metrics.get("discrepancy_rate_percent", 100.0)
             if disc_rate > 1.0:
@@ -187,6 +288,25 @@ class SupervisedClinicalPilotEngine:
         if self._stage_metrics[4]["status"] != "PASSED":
             raise PilotSurveillanceException("Cannot certify enterprise go-live before Stages 1-4 are PASSED.")
 
+        nurse_ergonomics_score_out_of_5 = _validate_non_negative_float(
+            nurse_ergonomics_score_out_of_5, "nurse_ergonomics_score_out_of_5"
+        )
+        if nurse_ergonomics_score_out_of_5 > 5.0:
+            raise PilotSurveillanceException(
+                f"INVALID METRIC: Nurse ergonomics score {nurse_ergonomics_score_out_of_5} cannot exceed 5.0."
+            )
+
+        p99_latency_ms = _validate_non_negative_float(p99_latency_ms, "p99_latency_ms")
+
+        if not medical_superintendent_signature_token or not isinstance(medical_superintendent_signature_token, str):
+            raise PilotSurveillanceException("Medical Superintendent signature token must be a non-empty string.")
+
+        token_str = medical_superintendent_signature_token.strip()
+        if token_str == "UNVERIFIED-SIGNATURE" or not (token_str.startswith("MS-SIG-") or len(token_str) >= 32):
+            raise PilotSurveillanceException(
+                "SECURITY HARD-STOP: Medical Superintendent signature token is unverified or invalid format."
+            )
+
         if nurse_ergonomics_score_out_of_5 < 4.0:
             raise PilotGateThresholdDeficitError(
                 f"ERGONOMICS DEFICIT: Nurse feedback score {nurse_ergonomics_score_out_of_5}/5.0 < 4.0 threshold."
@@ -202,7 +322,7 @@ class SupervisedClinicalPilotEngine:
             "certificate_id": f"CERT-ENTERPRISE-GOLIVE-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
             "certified_at": datetime.now(timezone.utc).isoformat(),
             "status": "PERMANENT_PRODUCTION_APPROVED",
-            "medical_superintendent_token": medical_superintendent_signature_token,
+            "medical_superintendent_token": token_str,
             "nurse_ergonomics_score": nurse_ergonomics_score_out_of_5,
             "p99_latency_ms": p99_latency_ms,
             "pilot_duration_days": 30

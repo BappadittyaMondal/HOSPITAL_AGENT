@@ -123,6 +123,12 @@ CONCEPT_ONTOLOGY_REGISTRY: Dict[str, Dict] = {
 }
 
 
+NEGATION_PREFIXES = (
+    "no ", "denies ", "denied ", "negative for ", "without ", "absent ", "ruled out ",
+    "না ", "নেই ", "ব্যতীত ", # Bengali
+    "nahi ", "koi nahi ", "bina " # Hindi
+)
+
 class ClinicalConceptMapper:
     """Resolves natural language, vernacular and clinical terms to exact SNOMED CT concepts."""
 
@@ -136,7 +142,15 @@ class ClinicalConceptMapper:
                 self._alias_map[alias.lower().strip()] = snomed_id
 
     def resolve(self, term: str) -> Dict:
-        cleaned = term.lower().strip()
+        raw = term.lower().strip()
+        is_negated = False
+        cleaned = raw
+        for prefix in NEGATION_PREFIXES:
+            if raw.startswith(prefix):
+                is_negated = True
+                cleaned = raw[len(prefix):].strip()
+                break
+
         snomed_id = self._alias_map.get(cleaned)
         if not snomed_id:
             for alias, sid in self._alias_map.items():
@@ -145,7 +159,11 @@ class ClinicalConceptMapper:
                     break
         if not snomed_id:
             raise UnmappedClinicalConceptError(f"Clinical concept '{term}' cannot be grounded to ontology.")
-        return CONCEPT_ONTOLOGY_REGISTRY[snomed_id]
+        
+        result = dict(CONCEPT_ONTOLOGY_REGISTRY[snomed_id])
+        result["assertion"] = "ABSENT" if is_negated else "PRESENT"
+        result["queried_term"] = term
+        return result
 
 
 # --------------------------------------------------------------------------------------------------
@@ -353,16 +371,23 @@ class DiagnosticGraphRAGEngine:
         absent_snomed = set()
 
         resolved_present = []
+        resolved_absent = []
+
         for term in present_terms:
             resolved = self.mapper.resolve(term)
-            present_snomed.add(resolved["snomed_id"])
-            resolved_present.append(resolved)
+            if resolved.get("assertion") == "ABSENT":
+                absent_snomed.add(resolved["snomed_id"])
+                resolved_absent.append(resolved)
+            else:
+                present_snomed.add(resolved["snomed_id"])
+                resolved_present.append(resolved)
 
-        resolved_absent = []
         for term in absent_terms:
             resolved = self.mapper.resolve(term)
             absent_snomed.add(resolved["snomed_id"])
-            resolved_absent.append(resolved)
+            res_copy = dict(resolved)
+            res_copy["assertion"] = "ABSENT"
+            resolved_absent.append(res_copy)
 
         differentials = self.pertinent_negatives.evaluate_differential(present_snomed, absent_snomed)
 

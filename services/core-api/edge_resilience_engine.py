@@ -116,6 +116,10 @@ class EdgeResilienceEngine:
             granted_at=now,
             expires_at=now + timedelta(days=duration_days),
         )
+        # Revoke resource from any prior node to guarantee exclusive partition ownership
+        for existing_node in self._nodes.values():
+            existing_node.assigned_leases.discard(resource_id)
+
         self._leases[resource_id] = lease
         self._nodes[node_id].assigned_leases.add(resource_id)
         return lease

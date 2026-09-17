@@ -80,6 +80,79 @@ class TestSupervisedClinicalPilot(unittest.TestCase):
         self.assertEqual(cert["status"], "PERMANENT_PRODUCTION_APPROVED")
         self.assertEqual(cert["pilot_duration_days"], 30)
 
+    def test_rejection_of_nan_and_infinite_values(self):
+        """Quality Gate 3 Hardening: Rejects NaN and Infinite values in clinical pilot metrics."""
+        import math
+        # NaN in Stage 2 latency
+        with self.assertRaises(PilotSurveillanceException) as ctx:
+            self.orchestrator.record_stage_2_emergency_metrics(100, 100, float("nan"))
+        self.assertIn("cannot be NaN or Infinite", str(ctx.exception))
+
+        # Inf in Stage 5 certification
+        self.orchestrator.record_stage_1_opd_metrics(500, 2, 498)
+        self.orchestrator.advance_stage(1, "CSB-AUTH-STAGE-1-VALID")
+        self.orchestrator.record_stage_2_emergency_metrics(100, 100, 0.05)
+        self.orchestrator.advance_stage(2, "CSB-AUTH-STAGE-2-VALID")
+        self.orchestrator.record_stage_3_inpatient_metrics(1000, 1000, 5, 0)
+        self.orchestrator.advance_stage(3, "CSB-AUTH-STAGE-3-VALID")
+        self.orchestrator.record_stage_4_icu_ot_metrics(10, 10, 20, 0)
+        self.orchestrator.advance_stage(4, "CSB-AUTH-STAGE-4-VALID")
+
+        with self.assertRaises(PilotSurveillanceException) as ctx:
+            self.orchestrator.certify_enterprise_go_live(
+                nurse_ergonomics_score_out_of_5=float("inf"),
+                p99_latency_ms=120.0,
+                medical_superintendent_signature_token="MS-SIG-BOARD-APPROVED-2026-STAMP"
+            )
+        self.assertIn("cannot be NaN or Infinite", str(ctx.exception))
+
+    def test_rejection_of_invariant_violations_and_negatives(self):
+        """Quality Gate 3 Hardening: Enforces logical invariants and rejects negative counts."""
+        # Negative count
+        with self.assertRaises(PilotSurveillanceException) as ctx:
+            self.orchestrator.record_stage_1_opd_metrics(-10, 0, 0)
+        self.assertIn("cannot be negative", str(ctx.exception))
+
+        # Discrepancies exceed total encounters
+        with self.assertRaises(PilotSurveillanceException) as ctx:
+            self.orchestrator.record_stage_1_opd_metrics(100, 105, 95)
+        self.assertIn("INVARIANT BREACH", str(ctx.exception))
+
+    def test_zero_observation_blocks_advancement(self):
+        """Quality Gate 3 Hardening: Zero observations result in INSUFFICIENT_EVIDENCE and block stage advancement."""
+        self.orchestrator.record_stage_1_opd_metrics(0, 0, 0)
+        with self.assertRaises(PilotGateThresholdDeficitError) as ctx:
+            self.orchestrator.advance_stage(1, "CSB-AUTH-STAGE-1-VALID")
+        self.assertIn("INSUFFICIENT_EVIDENCE", str(ctx.exception))
+
+    def test_out_of_order_stage_transition_blocked(self):
+        """Quality Gate 3 Hardening: Out-of-order stage transitions are rejected."""
+        self.orchestrator.record_stage_1_opd_metrics(500, 1, 499)
+        # Attempt to jump to stage 3 from stage 1
+        with self.assertRaises(PilotSurveillanceException) as ctx:
+            self.orchestrator.advance_stage(2, "CSB-AUTH-STAGE-2-VALID")
+        self.assertIn("Out-of-order stage transition", str(ctx.exception))
+
+    def test_unverified_medical_superintendent_signature_rejected(self):
+        """Quality Gate 3 Hardening: Unverified or malformed MS signatures are rejected."""
+        self.orchestrator.record_stage_1_opd_metrics(500, 2, 498)
+        self.orchestrator.advance_stage(1, "CSB-AUTH-STAGE-1-VALID")
+        self.orchestrator.record_stage_2_emergency_metrics(100, 100, 0.05)
+        self.orchestrator.advance_stage(2, "CSB-AUTH-STAGE-2-VALID")
+        self.orchestrator.record_stage_3_inpatient_metrics(1000, 1000, 5, 0)
+        self.orchestrator.advance_stage(3, "CSB-AUTH-STAGE-3-VALID")
+        self.orchestrator.record_stage_4_icu_ot_metrics(10, 10, 20, 0)
+        self.orchestrator.advance_stage(4, "CSB-AUTH-STAGE-4-VALID")
+
+        # Reject UNVERIFIED-SIGNATURE
+        with self.assertRaises(PilotSurveillanceException) as ctx:
+            self.orchestrator.certify_enterprise_go_live(
+                nurse_ergonomics_score_out_of_5=4.8,
+                p99_latency_ms=110.0,
+                medical_superintendent_signature_token="UNVERIFIED-SIGNATURE"
+            )
+        self.assertIn("unverified or invalid", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

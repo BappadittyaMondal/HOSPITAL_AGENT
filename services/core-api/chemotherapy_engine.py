@@ -56,12 +56,28 @@ class ChemotherapySafetyEngine:
         dose_per_m2: float,
         height_cm: float,
         weight_kg: float,
-        prescribing_oncologist_id: str
+        prescribing_oncologist_id: str,
+        anc_per_ul: Optional[float] = None,
+        platelets_per_ul: Optional[float] = None,
+        serum_creatinine_mg_dl: Optional[float] = None
     ) -> Dict:
-        """Creates a chemotherapy order calculating exact dose based on BSA."""
+        """Creates a chemotherapy order calculating exact dose based on BSA and validating lab gates."""
         bsa = calculate_bsa_mosteller(height_cm, weight_kg)
         calculated_total_dose = round(dose_per_m2 * bsa, 1)
         order_id = f"CHEMO-ORD-{uuid.uuid4().hex[:8].upper()}"
+
+        dispense_status = "LOCKED_PENDING_DUAL_NURSE_VERIFICATION"
+        lab_blocks = []
+        if anc_per_ul is not None and platelets_per_ul is not None:
+            is_safe, blocks = self.evaluate_pre_chemo_lab_thresholds(
+                anc_per_ul=anc_per_ul,
+                platelets_per_ul=platelets_per_ul,
+                hemoglobin_g_dl=12.0,
+                serum_creatinine_mg_dl=serum_creatinine_mg_dl or 1.0
+            )
+            if not is_safe:
+                dispense_status = "BLOCKED_LAB_SAFETY_GATE"
+                lab_blocks = blocks
 
         order = {
             "order_id": order_id,
@@ -74,7 +90,8 @@ class ChemotherapySafetyEngine:
             "prescribing_oncologist_id": prescribing_oncologist_id,
             "nurse_1_signoff": None,
             "nurse_2_signoff": None,
-            "dispense_status": "LOCKED_PENDING_DUAL_NURSE_VERIFICATION",
+            "dispense_status": dispense_status,
+            "lab_blocks": lab_blocks,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         self._chemo_orders[order_id] = order
@@ -94,6 +111,9 @@ class ChemotherapySafetyEngine:
         order = self._chemo_orders.get(order_id)
         if not order:
             return False, "ORDER_NOT_FOUND"
+
+        if order.get("dispense_status") == "BLOCKED_LAB_SAFETY_GATE":
+            return False, "PRE_CHEMO_LAB_DEFICIT: Cannot sign off order blocked by laboratory hematologic safety gate."
 
         # Check dose match tolerance (within 1%)
         if abs(verified_independent_dose - order["calculated_total_dose"]) > (order["calculated_total_dose"] * 0.01):

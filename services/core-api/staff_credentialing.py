@@ -8,7 +8,7 @@ Enforces:
 4. Mandatory Onboarding Gate: System login locked until mandatory safety training is certified.
 5. Procedure Privileging Matrix: Blocks uncredentialed or expired doctors from scheduling or performing procedures.
 """
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 from datetime import datetime, date, timezone, timedelta
 
 class CredentialStatus:

@@ -10,7 +10,7 @@ Enforces:
 """
 import uuid
 import hashlib
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 
 class NewbornEncounter:
