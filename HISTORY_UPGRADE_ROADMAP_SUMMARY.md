@@ -1059,7 +1059,11 @@ Before executing Phase 01, these technical decisions are formally locked:
 9. Master Phase runners: 19/19 passing with 100% exit code 0. [VERIFIED]
 10. STATUS OFFICIALLY CERTIFIED: **HARDENED ZERO-TRUST PRODUCTION ARCHITECTURE LOCKED**.
 
-### 6.20 PHASE 20: ENTERPRISE OPERATIONAL API ROUTING, KEYED HMAC AUDIT HARDENING, FAIL-FAST SECRET ENFORCEMENT & IEC 62304 CLASS C SAFETY TRACEABILITY (P0 — MISSION CRITICAL)
+---
+
+### PHASE 20: ENTERPRISE OPERATIONAL API ROUTING, KEYED HMAC AUDIT HARDENING, FAIL-FAST SECRET ENFORCEMENT & IEC 62304 CLASS C SAFETY TRACEABILITY
+**Objective:** Close all operational perimeter vulnerabilities by binding critical standalone engines (blood bank crossmatch, NDPS narcotics dispensing, PM-JAY package adjudication, edge partition leases, and digital WHO partograph) directly to live FastAPI REST routes; enforce production fail-fast checks eliminating default hardcoded secrets; upgrade audit ledger to keyed HMAC-SHA256 preventing privileged DBA hash chain rewrites; eliminate error-masking in DevSecOps CI/CD pipelines; and establish an IEC 62304 Class C Medical Device Hazard Traceability Matrix.  
+**Estimated Duration:** 2 Weeks | **Target Gaps Addressed:** Disconnected Operational Endpoints, Unkeyed Audit Ledger Rewrite, Fallback Hardcoded Secrets, Permissive CI/CD Masking, Missing IEC 62304 Class C Traceability  
 
 - [x] **20.1 Fail-Fast Production Secret Enforcement (`auth_manager.py`, `clinical_safety_board_governance.py`)**
   - [x] Enforce mandatory production secret check: `HOSPITAL_ENV=production` raises `RuntimeError` if `JWT_SECRET_KEY` or `CSB_HMAC_SECRET` is unset or empty.
