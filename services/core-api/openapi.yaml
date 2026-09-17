@@ -158,3 +158,106 @@ paths:
                           type: string
                   evaluated_in_microseconds:
                     type: number
+
+  /triage/history-intake:
+    post:
+      summary: Structured Branching History Intake & Red Flag Elicitation
+      operationId: processStructuredHistoryIntake
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session_id, patient_id, chief_complaint, answers]
+              properties:
+                session_id:
+                  type: string
+                patient_id:
+                  type: string
+                chief_complaint:
+                  type: string
+                patient_age:
+                  type: integer
+                is_female:
+                  type: boolean
+                is_pregnant:
+                  type: boolean
+                answers:
+                  type: object
+      responses:
+        '200':
+          description: History intake session processed with red flags and pertinent signs
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session_id, patient_id, active_red_flags, pertinent_positives, pertinent_negatives]
+
+  /triage/syndromic-holding-plan:
+    post:
+      summary: Formulate 5-10h Pre-Hospital Supportive Care Plan across 8 Syndromic Archetypes
+      operationId: generateSyndromicHoldingPlan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [patient_id, syndrome, vitals]
+              properties:
+                patient_id:
+                  type: string
+                syndrome:
+                  type: string
+                patient_age:
+                  type: integer
+                is_female:
+                  type: boolean
+                patient_weight_kg:
+                  type: number
+                vitals:
+                  type: object
+                current_medications:
+                  type: array
+                  items:
+                    type: string
+                known_allergies:
+                  type: array
+                  items:
+                    type: string
+                is_pregnant:
+                  type: boolean
+                estimated_transit_hours:
+                  type: number
+      responses:
+        '200':
+          description: Safe pre-hospital holding care plan with DRE-validated supportive bridge orders
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [plan_id, patient_id, syndrome, urgency_tier, supportive_medications, inviolable_blacklists]
+
+  /clinical/emergency-scores:
+    post:
+      summary: Compute Clinical Emergency Scores (GCS, FAST, Pediatric, Anaphylaxis, Burns)
+      operationId: computeEmergencyScore
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [score_type]
+              properties:
+                score_type:
+                  type: string
+                  enum: [GCS, FAST, PEDIATRIC, ANAPHYLAXIS, BURNS, BURNS_PARKLAND]
+      responses:
+        '200':
+          description: Emergency score computation result with non-bypassable clinical alerts
+          content:
+            application/json:
+              schema:
+                type: object

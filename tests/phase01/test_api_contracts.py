@@ -34,7 +34,14 @@ def test_openapi_contract():
     print(" [PASS] Server URL enforces /api/v1 versioning prefix.")
 
     # 3. Verify mandatory endpoints exist
-    required_paths = ["/health", "/auth/token", "/safety/evaluate-order"]
+    required_paths = [
+        "/health",
+        "/auth/token",
+        "/safety/evaluate-order",
+        "/triage/history-intake",
+        "/triage/syndromic-holding-plan",
+        "/clinical/emergency-scores"
+    ]
     for p in required_paths:
         if p not in content:
             print(f" [FAIL] Mandatory endpoint missing: {p}")

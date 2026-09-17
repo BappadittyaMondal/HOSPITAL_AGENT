@@ -24,7 +24,7 @@ def run_all_phases():
 
     print(f"\nDiscovered test directories: {phase_dirs}")
     print("=" * 80)
-    print(f" EXECUTING COMPREHENSIVE REGRESSION RUN ACROSS ALL PHASES (01 to 17)")
+    print(f" EXECUTING COMPREHENSIVE REGRESSION RUN ACROSS ALL {len(phase_dirs)} PHASES ({phase_dirs[0]} to {phase_dirs[-1]})")
     print("=" * 80)
 
     start = time.perf_counter()
