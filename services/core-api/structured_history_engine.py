@@ -183,13 +183,24 @@ class StructuredHistoryEngine:
                 clinical_note="Worse with breathing; suspect PE, pleurisy, or pericarditis"
             ))
 
+        # Check for atypical ACS presentation when chest pain is minimal/absent in high-risk patients
+        is_high_risk_acs = session.patient_age >= 60 or ans.get("has_diabetes", False) or ans.get("is_diabetic", False)
+        has_epigastric_cp = ans.get("epigastric_burning", False) or ans.get("epigastric_pain", False)
+        if is_high_risk_acs and has_epigastric_cp and (diaphoresis or breathlessness or vomiting):
+            if "ATYPICAL_ACUTE_CORONARY_SYNDROME_SILENT_MI" not in session.active_red_flags:
+                session.active_red_flags.append("ATYPICAL_ACUTE_CORONARY_SYNDROME_SILENT_MI")
+                session.recommended_immediate_actions.extend([
+                    "URGENT 12-LEAD ECG WITHIN 10 MINUTES: Diabetic/geriatric atypical ACS presentation (epigastric discomfort with autonomic symptoms).",
+                    "Administer chewable Aspirin 300mg immediately (if no active GI bleeding or documented allergy)."
+                ])
+
     def _process_abdominal_pain(self, session: HistoryIntakeSession, ans: Dict[str, Any]):
         severity = ans.get("pain_severity_1_to_10", 5)
         duration_h = ans.get("duration_hours", 6.0)
         rigidity = ans.get("is_abdomen_rigid_or_board_like", False)
         distension = ans.get("has_abdominal_distension", False)
         fever = ans.get("has_fever", False)
-        vomiting = ans.get("has_persistent_vomiting", False)
+        vomiting = ans.get("has_persistent_vomiting", False) or ans.get("has_vomiting", False)
         no_stool_flatus = ans.get("no_stool_or_flatus_in_24h", False)
 
         session.findings.append(StructuredFinding(
@@ -220,6 +231,44 @@ class StructuredHistoryEngine:
             session.recommended_immediate_actions.append(
                 "Immediate urine pregnancy test (UPT) and urgent ultrasound for ectopic pregnancy rule-out"
             )
+
+        # Multi-assertion finding graph: Detect atypical ACS in diabetic or geriatric patients
+        is_high_risk = session.patient_age >= 60 or ans.get("has_diabetes", False) or ans.get("is_diabetic", False)
+        has_epigastric = (
+            ans.get("epigastric_burning", False) or
+            ans.get("epigastric_discomfort", False) or
+            ans.get("epigastric_pain", False) or
+            ans.get("pain_location") in ("EPIGASTRIC", "UPPER_ABDOMEN") or
+            ans.get("is_epigastric", False)
+        )
+        has_autonomic = (
+            ans.get("has_cold_sweating", False) or
+            ans.get("has_vomiting", False) or
+            ans.get("has_shortness_of_breath", False) or
+            ans.get("has_diaphoresis", False)
+        )
+
+        if is_high_risk and has_epigastric and has_autonomic:
+            session.findings.append(StructuredFinding(
+                concept_name="Epigastric burning/discomfort",
+                snomed_id="249490001",
+                polarity=FindingPolarity.PRESENT,
+                is_red_flag=True,
+                clinical_note="Atypical ACS presentation in high-risk demographic (geriatric/diabetic)"
+            ))
+            session.findings.append(StructuredFinding(
+                concept_name="Chest pain",
+                snomed_id="29857009",
+                polarity=FindingPolarity.ABSENT,
+                clinical_note="Pertinent negative: absence of chest pain due to diabetic neuropathy or atypical ACS presentation"
+            ))
+            if "ATYPICAL_ACUTE_CORONARY_SYNDROME_SILENT_MI" not in session.active_red_flags:
+                session.active_red_flags.append("ATYPICAL_ACUTE_CORONARY_SYNDROME_SILENT_MI")
+                session.recommended_immediate_actions.extend([
+                    "URGENT 12-LEAD ECG WITHIN 10 MINUTES: Diabetic/geriatric patient with epigastric discomfort and autonomic symptoms must be evaluated for inferior wall / atypical myocardial infarction.",
+                    "Administer chewable Aspirin 300mg immediately (if no active GI bleeding or documented true aspirin allergy).",
+                    "Rule out inferior wall MI / acute coronary syndrome before treating as simple gastrointestinal dyspepsia."
+                ])
 
     def _process_breathlessness(self, session: HistoryIntakeSession, ans: Dict[str, Any]):
         onset = ans.get("onset_sudden", False)

@@ -190,6 +190,21 @@ class CPOEDREEngine:
         if any(k in drug_lower for k in k_sparing_list) and any(any(a in m for a in acei_arb_list) for m in meds_lower):
             hard_stops.append("LETHAL DDI: Potassium-sparing agent combined with ACEi/ARB causes fatal hyperkalemic cardiac arrest.")
 
+        # Potassium Supplements + Potassium-sparing Diuretics (Fatal Hyperkalemia)
+        k_supplements = ["potassium chloride", "potassium", "kcl"]
+        k_sparing_diuretics = ["spironolactone", "eplerenone", "triamterene", "amiloride"]
+        if any(p in drug_lower for p in k_supplements) and any(any(s in m for s in k_sparing_diuretics) for m in meds_lower):
+            hard_stops.append("LETHAL DDI: Potassium supplement combined with Potassium-sparing diuretic causes lethal hyperkalemic cardiac arrest.")
+        if any(s in drug_lower for s in k_sparing_diuretics) and any(any(p in m for p in k_supplements) for m in meds_lower):
+            hard_stops.append("LETHAL DDI: Potassium-sparing diuretic combined with Potassium supplement causes lethal hyperkalemic cardiac arrest.")
+
+        # Simvastatin + Strong CYP3A4 Inhibitors (Severe Rhabdomyolysis & Acute Renal Shutdown)
+        cyp3a4_inhibitors = ["clarithromycin", "erythromycin", "ketoconazole", "itraconazole", "posaconazole", "ritonavir", "cobicistat"]
+        if "simvastatin" in drug_lower and any(any(c in m for c in cyp3a4_inhibitors) for m in meds_lower):
+            hard_stops.append("LETHAL DDI: Simvastatin combined with Strong CYP3A4 inhibitor causes acute rhabdomyolysis and fatal acute tubular necrosis.")
+        if any(c in drug_lower for c in cyp3a4_inhibitors) and any("simvastatin" in m for m in meds_lower):
+            hard_stops.append("LETHAL DDI: Strong CYP3A4 inhibitor combined with Simvastatin causes acute rhabdomyolysis and fatal acute tubular necrosis.")
+
         # Clopidogrel + Omeprazole (Antiplatelet attenuation via CYP2C19)
         if "clopidogrel" in drug_lower and any("omeprazole" in m or "esomeprazole" in m for m in meds_lower):
             warnings.append("MAJOR DDI: Omeprazole inhibits CYP2C19 activation of Clopidogrel (subtherapeutic antiplatelet, high stent thrombosis risk). Recommend Pantoprazole.")

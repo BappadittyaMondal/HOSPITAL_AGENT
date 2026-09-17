@@ -12,6 +12,7 @@ import uuid
 import hmac
 import hashlib
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any, Tuple
 
@@ -27,6 +28,7 @@ class UniversalAuditLedger:
     """
 
     def __init__(self, db_path: Optional[str] = None, hmac_key: Optional[str] = None):
+        self._lock = threading.Lock()
         self.db_path = db_path or os.getenv("AUDIT_DB_PATH", os.path.join(os.path.dirname(__file__), "hospital_audit.db"))
         env_mode = os.getenv("HOSPITAL_ENV", "development").lower()
         key = hmac_key or os.getenv("AUDIT_LEDGER_HMAC_KEY")
@@ -81,10 +83,11 @@ class UniversalAuditLedger:
         payload_str = json.dumps(payload, sort_keys=True, default=str)
         payload_hash = hashlib.sha256(payload_str.encode("utf-8")).hexdigest()
 
-        conn = sqlite3.connect(self.db_path, timeout=10.0)
-        try:
-            with conn:
+        with self._lock:
+            conn = sqlite3.connect(self.db_path, timeout=30.0, isolation_level=None)
+            try:
                 cursor = conn.cursor()
+                cursor.execute("BEGIN EXCLUSIVE;")
                 cursor.execute("SELECT current_hash FROM audit_chain ORDER BY entry_index DESC LIMIT 1;")
                 last_row = cursor.fetchone()
                 prev_hash = last_row[0] if last_row else GENESIS_HASH
@@ -101,8 +104,12 @@ class UniversalAuditLedger:
                     actor_id, payload_str, payload_hash, prev_hash, current_hash
                 ))
                 idx = cursor.lastrowid
-        finally:
-            conn.close()
+                cursor.execute("COMMIT;")
+            except Exception:
+                cursor.execute("ROLLBACK;")
+                raise
+            finally:
+                conn.close()
 
         return {
             "entry_index": idx,
@@ -205,3 +212,5 @@ class UniversalAuditLedger:
 
 # Global singleton instance for core API service
 audit_ledger = UniversalAuditLedger()
+AuditLedger = UniversalAuditLedger
+

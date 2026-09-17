@@ -8,8 +8,29 @@
 
 import os
 import sys
+import re
+import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
+
+logger = logging.getLogger("hospital.core_api")
+
+def parse_dose_string(dose_str: Optional[str]) -> float:
+    """
+    Strictly parses dose strings like '500mg', '10.5 ml', '250 MCG', '500'.
+    Rejects non-numeric, malformed, zero, or negative inputs with ValueError.
+    """
+    if not dose_str or not isinstance(dose_str, str):
+        raise ValueError(f"Dose value missing or invalid: {dose_str}")
+
+    clean = dose_str.strip()
+    m = re.match(r"^([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Z/%]*)$", clean)
+    if not m:
+        raise ValueError(f"Malformed or non-numeric dose format: '{dose_str}'")
+    val = float(m.group(1))
+    if val <= 0.0:
+        raise ValueError(f"Prescribed dose must be strictly positive (>0), got: {val}")
+    return val
 
 # In-process microservice framework fallback for standalone execution
 try:
@@ -23,6 +44,35 @@ except ImportError:
 from db_session import outbox_manager, db_config
 from auth_manager import auth_security_manager
 from audit_ledger import audit_ledger
+
+def record_audit_event_safe(
+    tenant_id: str,
+    event_type: str,
+    aggregate_id: str,
+    actor_id: str,
+    payload: Dict[str, Any]
+) -> None:
+    """
+    Safely records a tamper-evident audit event.
+    Logs warnings on failure; fails closed (raises HTTPException 500) if HOSPITAL_ENV == 'production'.
+    """
+    try:
+        audit_ledger.record_event(
+            tenant_id=tenant_id,
+            event_type=event_type,
+            aggregate_id=aggregate_id,
+            actor_id=actor_id,
+            payload=payload
+        )
+    except Exception as exc:
+        logger.error(f"[AUDIT LEDGER FAILURE] Failed to record event {event_type} for {aggregate_id}: {exc}", exc_info=True)
+        if os.getenv("HOSPITAL_ENV", "development").lower() in ("production", "prod"):
+            if HAS_FASTAPI:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail={"status": "AUDIT_LEDGER_ERROR", "error": "Inviolable cryptographic audit logging failed. Transaction aborted."}
+                )
+            raise RuntimeError("Inviolable cryptographic audit logging failed. Transaction aborted.")
 from cpoe_dre_engine import CPOEDREEngine
 from structured_history_engine import StructuredHistoryEngine, ChiefComplaintCategory
 from syndromic_protocol_engine import SyndromicProtocolEngine, SyndromicArchetype
@@ -107,11 +157,11 @@ if HAS_FASTAPI:
         clinician_id: str
         order_type: str = "MEDICATION"
         items: List[OrderItem]
-        patient_weight_kg: Optional[float] = 70.0
-        patient_bsa_m2: Optional[float] = 1.73
-        serum_creatinine: Optional[float] = 1.0
-        patient_age: Optional[int] = 45
-        is_female: Optional[bool] = False
+        patient_weight_kg: Optional[float] = None
+        patient_bsa_m2: Optional[float] = None
+        serum_creatinine: Optional[float] = None
+        patient_age: Optional[int] = None
+        is_female: Optional[bool] = None
         current_medications: Optional[List[str]] = []
         known_allergies: Optional[List[str]] = []
         is_pregnant: Optional[bool] = False
@@ -150,6 +200,8 @@ if HAS_FASTAPI:
         patient_age_years: Optional[float] = None
         is_child: Optional[bool] = False
         tbsa_percentage: Optional[float] = 20.0
+        hours_since_burn: Optional[float] = 0.0
+        fluids_already_given_ml: Optional[float] = 0.0
 
     class CrossmatchRequest(BaseModel):
         recipient_mrn: str
@@ -166,12 +218,12 @@ if HAS_FASTAPI:
         order_id: str
         primary_user_id: str
         primary_role: str
-        primary_bio_token: Optional[str] = "BIO-VALID-TOKEN-01"
-        primary_bio_verified: Optional[bool] = True
+        primary_bio_token: Optional[str] = None
+        primary_bio_verified: Optional[bool] = None
         secondary_user_id: str
         secondary_role: str
-        secondary_bio_token: Optional[str] = "BIO-VALID-TOKEN-02"
-        secondary_bio_verified: Optional[bool] = True
+        secondary_bio_token: Optional[str] = None
+        secondary_bio_verified: Optional[bool] = None
 
     class PMJAYAdjudicateRequest(BaseModel):
         encounter_id: str
@@ -196,6 +248,34 @@ if HAS_FASTAPI:
         fetal_heart_rate_bpm: float
         contractions_per_10min: int
         amniotic_fluid_state: Optional[str] = "CLEAR"
+
+    async def get_current_principal(
+        authorization: Optional[str] = Header(None, alias="Authorization"),
+        x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-ID")
+    ) -> Dict[str, Any]:
+        env_mode = os.getenv("HOSPITAL_ENV", "development").lower()
+        strict_auth = os.getenv("STRICT_AUTH_REQUIRED", "false").lower() in ("true", "1", "yes")
+
+        if not authorization:
+            if env_mode in ("production", "prod") or strict_auth:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail={"status": "UNAUTHORIZED", "error": "Missing mandatory Authorization Bearer token."}
+                )
+            return {
+                "sub": "dev_principal",
+                "tenant_id": x_tenant_id or "TENANT-MAIN-01",
+                "role": "CONSULTANT_PHYSICIAN",
+                "permissions": ["*"]
+            }
+
+        valid, payload, err = auth_security_manager.decode_and_verify_token(authorization)
+        if not valid or not payload:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"status": "UNAUTHORIZED", "error": f"Invalid or expired authentication token: {err}"}
+            )
+        return payload
 
     @app.get("/health", summary="Service Health & Readiness Probe")
     async def get_health_status():
@@ -239,29 +319,81 @@ if HAS_FASTAPI:
     @app.post("/api/v1/safety/evaluate-order", summary="Sub-millisecond DRE Clinical Safety Verification")
     async def evaluate_clinical_order(
         req: EvaluateOrderRequest,
-        x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-ID")
+        x_tenant_id: Optional[str] = Header(None, alias="X-Tenant-ID"),
+        principal: Dict[str, Any] = Depends(get_current_principal)
     ):
         import time
         t0 = time.perf_counter()
         all_hard_stops = []
         all_warnings = []
+        tenant = x_tenant_id or principal.get("tenant_id") or "TENANT-MAIN-01"
+
+        # Check for mandatory clinical data
+        for item in req.items:
+            drug_l = item.name.lower()
+            if "metformin" in drug_l and req.serum_creatinine is None:
+                all_hard_stops.append({
+                    "rule_id": "DRE-INSUFFICIENT-DATA",
+                    "message": "Metformin requires verified serum creatinine / eGFR before evaluation. Default creatinine assumption prohibited.",
+                    "severity": "CRITICAL_FATAL"
+                })
+
+            if req.patient_age is not None and req.patient_age < 18 and req.patient_weight_kg is None:
+                all_hard_stops.append({
+                    "rule_id": "DRE-INSUFFICIENT-DATA",
+                    "message": "Pediatric medication order requires exact measured patient weight (kg). Default weight assumption prohibited.",
+                    "severity": "CRITICAL_FATAL"
+                })
+
+        if any(hs.get("rule_id") == "DRE-INSUFFICIENT-DATA" for hs in all_hard_stops):
+            eval_us = round((time.perf_counter() - t0) * 1_000_000, 2)
+            record_audit_event_safe(
+                tenant_id=tenant,
+                event_type="CLINICAL_ORDER_INSUFFICIENT_DATA_HOLD",
+                aggregate_id=req.patient_id,
+                actor_id=req.clinician_id,
+                payload={
+                    "status": "INSUFFICIENT_DATA_HOLD",
+                    "hard_stops": all_hard_stops,
+                    "items": [{"code": it.code, "name": it.name, "dose": it.dose, "route": it.route} for it in req.items]
+                }
+            )
+            return {
+                "status": "INSUFFICIENT_DATA_HOLD",
+                "hard_stops": all_hard_stops,
+                "warnings": all_warnings,
+                "evaluated_in_microseconds": eval_us
+            }
+
+        # Safe defaults for non-renal adult routine orders where parameters were omitted
+        eff_weight = req.patient_weight_kg if req.patient_weight_kg is not None else 70.0
+        eff_bsa = req.patient_bsa_m2 if req.patient_bsa_m2 is not None else 1.73
+        eff_cr = req.serum_creatinine if req.serum_creatinine is not None else 1.0
+        eff_age = req.patient_age if req.patient_age is not None else 45
+        eff_female = req.is_female if req.is_female is not None else False
 
         for item in req.items:
             try:
-                dose_val = float(''.join(c for c in (item.dose or "0") if (c.isdigit() or c == '.')))
-            except ValueError:
-                dose_val = 500.0
+                dose_val = parse_dose_string(item.dose)
+            except ValueError as ve:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "status": "INVALID_DOSE_FORMAT",
+                        "error": f"Invalid dose '{item.dose}' for medication '{item.name}'. {str(ve)}"
+                    }
+                )
 
             res = dre_engine.evaluate_order(
                 patient_id=req.patient_id,
                 drug_name=item.name,
-                prescribed_dose=dose_val if dose_val > 0 else 500.0,
+                prescribed_dose=dose_val,
                 route=item.route or "ORAL",
-                patient_weight_kg=req.patient_weight_kg or 70.0,
-                patient_bsa_m2=req.patient_bsa_m2 or 1.73,
-                serum_creatinine=req.serum_creatinine or 1.0,
-                patient_age=req.patient_age or 45,
-                is_female=req.is_female or False,
+                patient_weight_kg=eff_weight,
+                patient_bsa_m2=eff_bsa,
+                serum_creatinine=eff_cr,
+                patient_age=eff_age,
+                is_female=eff_female,
                 current_medications=req.current_medications or [],
                 known_allergies=req.known_allergies or [],
                 is_pregnant=req.is_pregnant or False
@@ -275,22 +407,19 @@ if HAS_FASTAPI:
         status_str = "BLOCKED" if all_hard_stops else ("WARNING_REQUIRES_OVERRIDE" if all_warnings else "APPROVED")
 
         # Record tamper-evident cryptographic audit event
-        try:
-            audit_ledger.record_event(
-                tenant_id=x_tenant_id or "TENANT-MAIN-01",
-                event_type="CLINICAL_ORDER_EVALUATION",
-                aggregate_id=req.patient_id,
-                actor_id=req.clinician_id,
-                payload={
-                    "status": status_str,
-                    "items": [{"code": it.code, "name": it.name, "dose": it.dose, "route": it.route} for it in req.items],
-                    "hard_stops_count": len(all_hard_stops),
-                    "warnings_count": len(all_warnings),
-                    "evaluated_in_microseconds": eval_us
-                }
-            )
-        except Exception:
-            pass
+        record_audit_event_safe(
+            tenant_id=tenant,
+            event_type="CLINICAL_ORDER_EVALUATION",
+            aggregate_id=req.patient_id,
+            actor_id=req.clinician_id,
+            payload={
+                "status": status_str,
+                "items": [{"code": it.code, "name": it.name, "dose": it.dose, "route": it.route} for it in req.items],
+                "hard_stops_count": len(all_hard_stops),
+                "warnings_count": len(all_warnings),
+                "evaluated_in_microseconds": eval_us
+            }
+        )
 
         return {
             "status": status_str,
@@ -300,7 +429,10 @@ if HAS_FASTAPI:
         }
 
     @app.post("/api/v1/triage/history-intake", summary="Structured History Intake & Red Flag Elicitation")
-    async def process_structured_history(req: HistoryIntakeRequest):
+    async def process_structured_history(
+        req: HistoryIntakeRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
         try:
             complaint = ChiefComplaintCategory(req.chief_complaint)
         except ValueError:
@@ -315,20 +447,17 @@ if HAS_FASTAPI:
         )
         history_engine.process_responses(sess, req.answers)
 
-        try:
-            audit_ledger.record_event(
-                tenant_id="TENANT-MAIN-01",
-                event_type="STRUCTURED_HISTORY_INTAKE",
-                aggregate_id=sess.patient_id,
-                actor_id=sess.session_id,
-                payload={
-                    "complaint": complaint.value if hasattr(complaint, "value") else str(complaint),
-                    "active_red_flags": sess.active_red_flags,
-                    "findings_count": len(sess.findings)
-                }
-            )
-        except Exception:
-            pass
+        record_audit_event_safe(
+            tenant_id=principal.get("tenant_id", "TENANT-MAIN-01"),
+            event_type="STRUCTURED_HISTORY_INTAKE",
+            aggregate_id=sess.patient_id,
+            actor_id=sess.session_id,
+            payload={
+                "complaint": complaint.value if hasattr(complaint, "value") else str(complaint),
+                "active_red_flags": sess.active_red_flags,
+                "findings_count": len(sess.findings)
+            }
+        )
 
         return {
             "session_id": sess.session_id,
@@ -349,7 +478,10 @@ if HAS_FASTAPI:
         }
 
     @app.post("/api/v1/triage/syndromic-holding-plan", summary="Generate 5-10 Hour Rural Pre-Hospital Holding Care Plan")
-    async def generate_syndromic_plan(req: SyndromicHoldingPlanRequest):
+    async def generate_syndromic_plan(
+        req: SyndromicHoldingPlanRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
         try:
             syndrome = SyndromicArchetype(req.syndrome)
         except ValueError:
@@ -367,20 +499,17 @@ if HAS_FASTAPI:
             estimated_transit_hours=req.estimated_transit_hours or 6.0
         )
 
-        try:
-            audit_ledger.record_event(
-                tenant_id="TENANT-MAIN-01",
-                event_type="SYNDROMIC_HOLDING_PLAN_GENERATION",
-                aggregate_id=plan.patient_id,
-                actor_id=plan.plan_id,
-                payload={
-                    "syndrome": plan.syndrome.value if hasattr(plan.syndrome, "value") else str(plan.syndrome),
-                    "urgency_tier": plan.urgency_tier,
-                    "estimated_transit_hours": plan.estimated_transit_hours
-                }
-            )
-        except Exception:
-            pass
+        record_audit_event_safe(
+            tenant_id=principal.get("tenant_id", "TENANT-MAIN-01"),
+            event_type="SYNDROMIC_HOLDING_PLAN_GENERATION",
+            aggregate_id=plan.patient_id,
+            actor_id=plan.plan_id,
+            payload={
+                "syndrome": plan.syndrome.value if hasattr(plan.syndrome, "value") else str(plan.syndrome),
+                "urgency_tier": plan.urgency_tier,
+                "estimated_transit_hours": plan.estimated_transit_hours
+            }
+        )
 
         return {
             "plan_id": plan.plan_id,
@@ -396,7 +525,10 @@ if HAS_FASTAPI:
         }
 
     @app.post("/api/v1/clinical/emergency-scores", summary="Compute Clinical Emergency Scores")
-    async def compute_emergency_score(req: EmergencyScoreRequest):
+    async def compute_emergency_score(
+        req: EmergencyScoreRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
         st = req.score_type.upper()
         if st == "GCS":
             res = calculate_glasgow_coma_scale(
@@ -429,14 +561,19 @@ if HAS_FASTAPI:
             res = calculate_parkland_burns_fluid(
                 tbsa_percentage=req.tbsa_percentage or 20.0,
                 patient_weight_kg=req.patient_weight_kg or 70.0,
-                is_pediatric=req.is_child or False
+                is_pediatric=req.is_child or False,
+                hours_since_burn=req.hours_since_burn if req.hours_since_burn is not None and req.hours_since_burn > 0 else (req.onset_hours_ago or 0.0),
+                fluids_already_given_ml=req.fluids_already_given_ml or 0.0
             )
             return res.__dict__
         else:
             raise HTTPException(status_code=400, detail=f"Unknown score type: {req.score_type}")
 
     @app.post("/api/v1/transfusion/crossmatch", summary="Blood Bank Crossmatch & Inviolable ABO Safety Barrier")
-    async def crossmatch_blood_unit(req: CrossmatchRequest):
+    async def crossmatch_blood_unit(
+        req: CrossmatchRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
         try:
             compatible, msg = blood_bank_engine.verify_and_crossmatch_unit(
                 recipient_mrn=req.recipient_mrn,
@@ -447,16 +584,13 @@ if HAS_FASTAPI:
             unit = blood_bank_engine._inventory.get(req.unit_barcode)
             unit_bg = unit["blood_group"] if unit else "UNKNOWN"
 
-            try:
-                audit_ledger.record_event(
-                    tenant_id="TENANT-MAIN-01",
-                    event_type="BLOOD_TRANSFUSION_CROSSMATCH",
-                    aggregate_id=req.recipient_mrn,
-                    actor_id=req.transfusion_order_id,
-                    payload={"unit_barcode": req.unit_barcode, "compatible": compatible, "message": msg}
-                )
-            except Exception:
-                pass
+            record_audit_event_safe(
+                tenant_id=principal.get("tenant_id", "TENANT-MAIN-01"),
+                event_type="BLOOD_TRANSFUSION_CROSSMATCH",
+                aggregate_id=req.recipient_mrn,
+                actor_id=req.transfusion_order_id,
+                payload={"unit_barcode": req.unit_barcode, "compatible": compatible, "message": msg}
+            )
 
             if not compatible:
                 raise HTTPException(status_code=422, detail={
@@ -481,20 +615,43 @@ if HAS_FASTAPI:
             raise HTTPException(status_code=400, detail=str(e))
 
     @app.post("/api/v1/pharmacy/narcotics/dispense", summary="NDPS Controlled Substance Dual-Witness Dispense")
-    async def dispense_narcotic(req: NarcoticDispenseRequest):
+    async def dispense_narcotic(
+        req: NarcoticDispenseRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
         try:
+            # Enforce dual-biometric verification and tokens
+            if not req.primary_bio_verified or not req.secondary_bio_verified:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "status": "DUAL_BIOMETRIC_AUTH_FAILED",
+                        "error": "Both primary and secondary witness biometrics must be positively verified."
+                    }
+                )
+
+            if (not req.primary_bio_token or not req.primary_bio_token.strip() or
+                not req.secondary_bio_token or not req.secondary_bio_token.strip()):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "status": "DUAL_BIOMETRIC_AUTH_FAILED",
+                        "error": "Biometric hardware tokens are mandatory for both witnesses."
+                    }
+                )
+
             c1 = BiometricCredential(
                 user_id=req.primary_user_id,
                 role=req.primary_role,
-                biometric_token=req.primary_bio_token or "BIO-VALID-TOKEN-01",
-                biometric_verified=req.primary_bio_verified if req.primary_bio_verified is not None else True,
+                biometric_token=req.primary_bio_token.strip(),
+                biometric_verified=True,
                 verified_at=datetime.now(timezone.utc)
             )
             c2 = BiometricCredential(
                 user_id=req.secondary_user_id,
                 role=req.secondary_role,
-                biometric_token=req.secondary_bio_token or "BIO-VALID-TOKEN-02",
-                biometric_verified=req.secondary_bio_verified if req.secondary_bio_verified is not None else True,
+                biometric_token=req.secondary_bio_token.strip(),
+                biometric_verified=True,
                 verified_at=datetime.now(timezone.utc)
             )
             entry = narcotics_vault.dispense_narcotic(
@@ -506,16 +663,13 @@ if HAS_FASTAPI:
                 primary_auth=c1,
                 secondary_auth=c2
             )
-            try:
-                audit_ledger.record_event(
-                    tenant_id="TENANT-MAIN-01",
-                    event_type="NDPS_NARCOTIC_DISPENSED",
-                    aggregate_id=req.patient_id,
-                    actor_id=req.primary_user_id,
-                    payload={"drug_id": req.drug_id, "quantity": req.quantity, "entry_id": entry.entry_id}
-                )
-            except Exception:
-                pass
+            record_audit_event_safe(
+                tenant_id=principal.get("tenant_id", "TENANT-MAIN-01"),
+                event_type="NDPS_NARCOTIC_DISPENSED",
+                aggregate_id=req.patient_id,
+                actor_id=req.primary_user_id,
+                payload={"drug_id": req.drug_id, "quantity": req.quantity, "entry_id": entry.entry_id}
+            )
 
             return {
                 "status": "NARCOTIC_DISPENSED_SUCCESS",
@@ -530,11 +684,16 @@ if HAS_FASTAPI:
             raise HTTPException(status_code=403, detail={"status": "DUAL_BIOMETRIC_AUTH_FAILED", "error": str(e)})
         except NarcoticVaultError as e:
             raise HTTPException(status_code=422, detail={"status": "NDPS_VAULT_VIOLATION", "error": str(e)})
+        except HTTPException:
+            raise
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
 
     @app.post("/api/v1/billing/pmjay/adjudicate", summary="PM-JAY Bundled Package Anti-Breakage Adjudication")
-    async def adjudicate_pmjay_charge(req: PMJAYAdjudicateRequest):
+    async def adjudicate_pmjay_charge(
+        req: PMJAYAdjudicateRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
         try:
             if req.encounter_id not in pmjay_engine.encounters:
                 pmjay_engine.register_pmjay_encounter(
@@ -551,16 +710,13 @@ if HAS_FASTAPI:
                 category=req.category,
                 amount_inr=req.amount_inr
             )
-            try:
-                audit_ledger.record_event(
-                    tenant_id="TENANT-MAIN-01",
-                    event_type="PMJAY_ADDON_ADJUDICATED",
-                    aggregate_id=req.patient_id,
-                    actor_id=req.encounter_id,
-                    payload={"package_code": req.package_code, "item_code": req.item_code, "amount_inr": req.amount_inr}
-                )
-            except Exception:
-                pass
+            record_audit_event_safe(
+                tenant_id=principal.get("tenant_id", "TENANT-MAIN-01"),
+                event_type="PMJAY_ADDON_ADJUDICATED",
+                aggregate_id=req.patient_id,
+                actor_id=req.encounter_id,
+                payload={"package_code": req.package_code, "item_code": req.item_code, "amount_inr": req.amount_inr}
+            )
 
             return {
                 "status": "PMJAY_ADDON_APPROVED",
@@ -571,16 +727,13 @@ if HAS_FASTAPI:
                 "covered_under_specialty_addon": True
             }
         except PMJAYPackageBreakageError as e:
-            try:
-                audit_ledger.record_event(
-                    tenant_id="TENANT-MAIN-01",
-                    event_type="PMJAY_PACKAGE_BREAKAGE_ATTEMPT_INTERCEPTED",
-                    aggregate_id=req.patient_id,
-                    actor_id=req.encounter_id,
-                    payload={"package_code": req.package_code, "prohibited_category": req.category, "item_name": req.item_name}
-                )
-            except Exception:
-                pass
+            record_audit_event_safe(
+                tenant_id=principal.get("tenant_id", "TENANT-MAIN-01"),
+                event_type="PMJAY_PACKAGE_BREAKAGE_ATTEMPT_INTERCEPTED",
+                aggregate_id=req.patient_id,
+                actor_id=req.encounter_id,
+                payload={"package_code": req.package_code, "prohibited_category": req.category, "item_name": req.item_name}
+            )
             raise HTTPException(status_code=422, detail={"status": "PMJAY_PACKAGE_BREAKAGE_BLOCKED", "error": str(e)})
         except HTTPException:
             raise
@@ -588,7 +741,10 @@ if HAS_FASTAPI:
             raise HTTPException(status_code=400, detail=str(e))
 
     @app.post("/api/v1/edge/leases/request", summary="Pessimistic Edge Resource Lease for 72h Offline Resilience")
-    async def request_edge_lease(req: EdgeLeaseRequest):
+    async def request_edge_lease(
+        req: EdgeLeaseRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
         try:
             node = req.node_id.upper().replace("-", "_")
             if node not in edge_engine._nodes:
@@ -609,16 +765,13 @@ if HAS_FASTAPI:
                 resource_type=req.resource_type,
                 duration_days=int((req.duration_hours or 72.0) / 24.0) or 3
             )
-            try:
-                audit_ledger.record_event(
-                    tenant_id="TENANT-MAIN-01",
-                    event_type="EDGE_RESOURCE_LEASED",
-                    aggregate_id=req.resource_id,
-                    actor_id=req.node_id,
-                    payload={"lease_id": lease.lease_id, "resource_type": req.resource_type}
-                )
-            except Exception:
-                pass
+            record_audit_event_safe(
+                tenant_id=principal.get("tenant_id", "TENANT-MAIN-01"),
+                event_type="EDGE_RESOURCE_LEASED",
+                aggregate_id=req.resource_id,
+                actor_id=req.node_id,
+                payload={"lease_id": lease.lease_id, "resource_type": req.resource_type}
+            )
 
             return {
                 "status": "LEASE_GRANTED",
@@ -638,7 +791,10 @@ if HAS_FASTAPI:
             raise HTTPException(status_code=400, detail=str(e))
 
     @app.post("/api/v1/clinical/partograph/record", summary="Digital WHO Partograph Observation & Action Line Alert")
-    async def record_partograph_observation(req: PartographRecordRequest):
+    async def record_partograph_observation(
+        req: PartographRecordRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
         try:
             entry = obstetrics_engine.log_partograph_progress(
                 patient_id=req.patient_id,
@@ -654,16 +810,13 @@ if HAS_FASTAPI:
                 urgency = "HIGH_RISK_MONITORING"
                 action_msg = "ALERT LINE BREACHED: Labor progress slow. Transfer to tertiary obstetric care facility."
 
-            try:
-                audit_ledger.record_event(
-                    tenant_id="TENANT-MAIN-01",
-                    event_type="PARTOGRAPH_OBSERVATION_RECORDED",
-                    aggregate_id=req.patient_id,
-                    actor_id=entry.entry_id,
-                    payload={"dilatation": req.cervical_dilatation_cm, "action_line_breached": entry.action_line_breached, "urgency": urgency}
-                )
-            except Exception:
-                pass
+            record_audit_event_safe(
+                tenant_id=principal.get("tenant_id", "TENANT-MAIN-01"),
+                event_type="PARTOGRAPH_OBSERVATION_RECORDED",
+                aggregate_id=req.patient_id,
+                actor_id=entry.entry_id,
+                payload={"dilatation": req.cervical_dilatation_cm, "action_line_breached": entry.action_line_breached, "urgency": urgency}
+            )
 
             return {
                 "status": "OBSERVATION_RECORDED",
@@ -679,16 +832,13 @@ if HAS_FASTAPI:
                 "urgency": urgency
             }
         except PartographActionLineBreachError as e:
-            try:
-                audit_ledger.record_event(
-                    tenant_id="TENANT-MAIN-01",
-                    event_type="PARTOGRAPH_ACTION_LINE_BREACH_ALARM",
-                    aggregate_id=req.patient_id,
-                    actor_id="OB-EMERGENCY",
-                    payload={"dilatation": req.cervical_dilatation_cm, "hours": req.hours_in_active_labor, "error": str(e)}
-                )
-            except Exception:
-                pass
+            record_audit_event_safe(
+                tenant_id=principal.get("tenant_id", "TENANT-MAIN-01"),
+                event_type="PARTOGRAPH_ACTION_LINE_BREACH_ALARM",
+                aggregate_id=req.patient_id,
+                actor_id="OB-EMERGENCY",
+                payload={"dilatation": req.cervical_dilatation_cm, "hours": req.hours_in_active_labor, "error": str(e)}
+            )
             return {
                 "status": "ACTION_LINE_BREACH_ALERT",
                 "patient_id": req.patient_id,

@@ -239,17 +239,23 @@ class BurnsResuscitationPlan:
     fluid_type: str
     target_urine_output_ml_per_kg_per_h: float
     safety_instructions: List[str]
+    hours_since_burn: float = 0.0
+    remaining_first_window_hours: float = 8.0
+    adjusted_first_window_rate_ml_per_hour: float = 0.0
+    is_delayed_presentation: bool = False
 
 
 def calculate_parkland_burns_fluid(
     tbsa_percentage: float,
     patient_weight_kg: float,
-    is_pediatric: bool = False
+    is_pediatric: bool = False,
+    hours_since_burn: float = 0.0,
+    fluids_already_given_ml: float = 0.0
 ) -> BurnsResuscitationPlan:
     """
     Computes Parkland fluid resuscitation for major thermal burns (> 15% TBSA in adults, > 10% in children).
     Formula: Total 24h Ringer's Lactate = 4 mL * Weight (kg) * % TBSA.
-    50% given over the first 8 hours FROM THE TIME OF BURN INJURY.
+    50% given over the first 8 hours FROM THE TIME OF BURN INJURY (adjusted for elapsed time).
     50% given over the following 16 hours.
     """
     if tbsa_percentage < 0 or tbsa_percentage > 100:
@@ -273,6 +279,21 @@ def calculate_parkland_burns_fluid(
         "DO NOT APPLY UNVERIFIED TOXIC HERBS, TOOTHPASTE, OR COW DUNG TO BURN WOUNDS."
     ]
 
+    is_delayed = False
+    if hours_since_burn <= 0.0:
+        remaining_hours = 8.0
+        adjusted_rate = rate_first_8h
+    elif hours_since_burn < 8.0:
+        remaining_hours = round(8.0 - hours_since_burn, 2)
+        remaining_fluid = max(first_8h - fluids_already_given_ml, 0.0)
+        adjusted_rate = round(remaining_fluid / remaining_hours, 1)
+        instructions.insert(0, f"ELAPSED BURN TIME ADJUSTMENT: Patient presents {hours_since_burn:.1f}h post-burn. Deliver remaining first-half volume ({remaining_fluid:.0f} mL) over remaining {remaining_hours:.1f}h at {adjusted_rate} mL/h.")
+    else:
+        remaining_hours = 0.0
+        is_delayed = True
+        adjusted_rate = round(next_16h / 16.0, 1)
+        instructions.insert(0, "DELAYED PRESENTATION WARNING: Patient arrived >= 8 hours after burn injury. First 8-hour window has elapsed. Aggressively titrate fluid resuscitation to target urine output immediately.")
+
     return BurnsResuscitationPlan(
         tbsa_percentage=tbsa_percentage,
         patient_weight_kg=patient_weight_kg,
@@ -283,5 +304,9 @@ def calculate_parkland_burns_fluid(
         next_16h_rate_ml_per_hour=rate_next_16h,
         fluid_type="Ringer's Lactate (Hartmann's Solution)",
         target_urine_output_ml_per_kg_per_h=target_uo,
-        safety_instructions=instructions
+        safety_instructions=instructions,
+        hours_since_burn=round(hours_since_burn, 2),
+        remaining_first_window_hours=remaining_hours,
+        adjusted_first_window_rate_ml_per_hour=adjusted_rate,
+        is_delayed_presentation=is_delayed
     )

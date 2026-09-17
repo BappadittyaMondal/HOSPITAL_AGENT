@@ -12,7 +12,8 @@ Execution Time: Sub-millisecond (< 1.0 ms), 100% deterministic, zero ungrounded 
 """
 
 import math
-from typing import Dict, List, Optional, Set, Tuple
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Set, Tuple, Union, Any
 
 
 class DiagnosticSafetyException(Exception):
@@ -28,6 +29,36 @@ class RedFlagRuleOutRequiredError(DiagnosticSafetyException):
 class UnmappedClinicalConceptError(DiagnosticSafetyException):
     """Raised when an ungrounded or ambiguous clinical concept cannot be mapped to an ontology."""
     pass
+
+
+@dataclass
+class InvestigationResult:
+    """
+    Structured laboratory / diagnostic test result with verification status,
+    quantitative values, reference intervals, and clinician sign-off.
+    """
+    investigation_id: str  # SNOMED ID (e.g., '102685005' for Troponin, '164868007' for ECG, '274092004' for D-dimer)
+    test_name: str
+    status: str  # "FINAL", "PRELIMINARY", "PENDING", "CANCELLED"
+    numeric_value: Optional[float] = None
+    reference_low: Optional[float] = None
+    reference_high: Optional[float] = None
+    units: Optional[str] = None
+    clinician_signed_off: bool = False
+    signed_by: Optional[str] = None
+
+    def is_valid_rule_out(self) -> Tuple[bool, str]:
+        """Validates that this result is authorized and completed to rule out a lethal condition."""
+        if str(self.status).upper() != "FINAL":
+            return False, f"Test '{self.test_name}' status is '{self.status}'; must be 'FINAL' to rule out emergency."
+        if not self.clinician_signed_off:
+            return False, f"Test '{self.test_name}' lacks mandatory clinician sign-off."
+        if self.numeric_value is None:
+            # Qualitative evaluation (such as 12-lead ECG interpreted by physician)
+            if any(k in self.test_name.upper() for k in ("ECG", "ELECTROCARDIOGRAM")):
+                return True, "Valid qualitative finding with sign-off"
+            return False, f"Test '{self.test_name}' lacks quantitative numeric value."
+        return True, "Valid"
 
 
 # --------------------------------------------------------------------------------------------------
@@ -389,17 +420,48 @@ class CognitiveDeBiasingMatrix:
     def verify_safe_discharge_or_benign_diagnosis(
         self,
         present_snomed_ids: Set[str],
-        completed_investigations: Set[str],
+        completed_investigations: Union[Set[str], List[Any], Set[Any]],
         proposed_diagnosis_key: str
     ) -> Dict:
         is_proposed_benign = not DISEASE_KNOWLEDGE_DAG.get(proposed_diagnosis_key, {}).get("is_red_flag_emergency", False)
+
+        completed_ids = set()
+        structured_lookup: Dict[str, Tuple[bool, str, Any]] = {}
+
+        for item in completed_investigations:
+            if isinstance(item, str):
+                completed_ids.add(item)
+            elif isinstance(item, InvestigationResult):
+                valid, msg = item.is_valid_rule_out()
+                if valid:
+                    completed_ids.add(item.investigation_id)
+                structured_lookup[item.investigation_id] = (valid, msg, item)
+            elif isinstance(item, dict):
+                inv_id = item.get("investigation_id", "")
+                st = str(item.get("status", "")).upper()
+                signed = bool(item.get("clinician_signed_off", False))
+                val = item.get("numeric_value")
+                is_ecg = any(k in str(item.get("test_name", "")).upper() for k in ("ECG", "ELECTROCARDIOGRAM"))
+                valid = (st == "FINAL") and signed and (val is not None or is_ecg)
+                msg = "Valid" if valid else f"Status: '{st}' (must be FINAL), signed: {signed}, numeric_value: {val}"
+                if valid:
+                    completed_ids.add(inv_id)
+                structured_lookup[inv_id] = (valid, msg, item)
 
         unmet_rule_outs = []
         for syndrome_key, syndrome_data in MUST_NOT_MISS_SYNDROMES.items():
             syndrome_triggered = any(s in present_snomed_ids for s in syndrome_data["trigger_snomed_ids"])
             if syndrome_triggered and is_proposed_benign:
                 for rule_out in syndrome_data["mandatory_rule_outs"]:
-                    missing_evals = [e for e in rule_out["required_evaluations"] if e not in completed_investigations]
+                    missing_evals = []
+                    for e in rule_out["required_evaluations"]:
+                        if e not in completed_ids:
+                            if e in structured_lookup:
+                                valid, reason, _ = structured_lookup[e]
+                                missing_evals.append(f"{e} (REJECTED: {reason})")
+                            else:
+                                missing_evals.append(e)
+
                     if missing_evals:
                         unmet_rule_outs.append({
                             "condition": rule_out["condition"],

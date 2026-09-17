@@ -99,51 +99,97 @@ CANONICAL_SAFETY_CASES = [
     }
 ]
 
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "services", "core-api")))
+from cpoe_dre_engine import CPOEDREEngine
+from nicu_pediatric_engine import NICUPediatricEngine, NeonatalDoseToxicityError
+
 class DeterministicSafetyHarness:
-    """Simulates/tests the Rust DRE rule evaluation engine."""
+    """Evaluates safety test cases directly against the production CPOEDREEngine and NICUPediatricEngine."""
+    def __init__(self):
+        self.dre = CPOEDREEngine(tenant_id="TENANT-REGRESSION")
+        self.nicu = NICUPediatricEngine()
+        self.nicu.register_neonate(
+            patient_id="NEO-REG-01",
+            gestational_age_weeks=38.0,
+            birth_weight_grams=7500.0,
+            current_weight_grams=7500.0
+        )
+
     def evaluate(self, test_case: Dict) -> Tuple[bool, str]:
         cat = test_case.get("category")
         
-        # 1. Evaluate Drug-Drug Interactions
+        # 1. Evaluate Drug-Drug Interactions directly via production DRE
         if cat == "DRUG_DRUG_INTERACTION":
-            drugs = {test_case["drug_a"].lower(), test_case["drug_b"].lower()}
-            # Rule: Nitrates + PDE5 inhibitors
-            if ("nitroglycerin" in drugs and "sildenafil" in drugs):
-                return True, "INTERCEPTED: Absolute contraindication Sildenafil + Nitroglycerin (cGMP syncope/death)."
-            if ("methotrexate" in drugs and "trimethoprim-sulfamethoxazole" in drugs):
-                return True, "INTERCEPTED: Absolute contraindication MTX + TMP-SMX (Bone marrow failure)."
-            if ("potassium chloride iv" in drugs and "spironolactone" in drugs):
-                return True, "INTERCEPTED: Absolute contraindication IV Potassium + Potassium-sparing diuretic."
-            if ("linezolid" in drugs and "fluoxetine" in drugs):
-                return True, "INTERCEPTED: Absolute contraindication Linezolid + SSRI (Serotonin Syndrome)."
-            if ("simvastatin" in drugs and "clarithromycin" in drugs):
-                return True, "INTERCEPTED: Severe contraindication Simvastatin + Strong CYP3A4 inhibitor."
+            drug_a = test_case["drug_a"]
+            drug_b = test_case["drug_b"]
+            res = self.dre.evaluate_order(
+                patient_id="P_DDI_TEST",
+                drug_name=drug_a,
+                prescribed_dose=100.0,
+                route="ORAL",
+                patient_weight_kg=70.0,
+                patient_bsa_m2=1.73,
+                serum_creatinine=1.0,
+                patient_age=50,
+                is_female=False,
+                current_medications=[drug_b],
+                known_allergies=[]
+            )
+            if res["status"] == "BLOCKED":
+                return True, f"INTERCEPTED: {res['hard_stops'][0]}"
 
-        # 2. Evaluate Drug-Allergy Cross-Reactivity
+        # 2. Evaluate Drug-Allergy Cross-Reactivity directly via production DRE
         elif cat == "DRUG_ALLERGY_ANAPHYLAXIS":
-            allergen = test_case["allergen"].lower()
-            drug = test_case["prescribed_drug"].lower()
-            if allergen == "penicillin" and ("amoxicillin" in drug or "ampicillin" in drug or "penicillin" in drug):
-                return True, f"INTERCEPTED: Beta-lactam anaphylaxis cross-reactivity ({drug} with documented {allergen} allergy)."
-            if ("sulfa" in allergen or "sulfo" in allergen) and ("sulfa" in drug or "sulfo" in drug or "cotrimoxazole" in drug or "bactrim" in drug):
-                return True, f"INTERCEPTED: Sulfonamide severe cross-reactivity ({drug} with documented {allergen} allergy)."
+            allergen = test_case["allergen"]
+            prescribed_drug = test_case["prescribed_drug"]
+            res = self.dre.evaluate_order(
+                patient_id="P_ALLERGY_TEST",
+                drug_name=prescribed_drug,
+                prescribed_dose=100.0,
+                route="ORAL",
+                patient_weight_kg=70.0,
+                patient_bsa_m2=1.73,
+                serum_creatinine=1.0,
+                patient_age=50,
+                is_female=False,
+                current_medications=[],
+                known_allergies=[allergen]
+            )
+            if res["status"] == "BLOCKED":
+                return True, f"INTERCEPTED: {res['hard_stops'][0]}"
 
-        # 3. Evaluate Renal Dose Limits
+        # 3. Evaluate Renal Dose Limits directly via production DRE
         elif cat == "ORGAN_IMPAIRMENT_CONTRAINDICATION":
-            drug = test_case["prescribed_drug"].lower()
-            egfr = test_case.get("patient_egfr", 100.0)
-            if drug == "metformin" and egfr < 30.0:
-                return True, f"INTERCEPTED: Metformin strictly contraindicated in severe renal impairment (eGFR {egfr} < 30 mL/min)."
+            prescribed_drug = test_case["prescribed_drug"]
+            res = self.dre.evaluate_order(
+                patient_id="P_RENAL_TEST",
+                drug_name=prescribed_drug,
+                prescribed_dose=500.0,
+                route="ORAL",
+                patient_weight_kg=70.0,
+                patient_bsa_m2=1.73,
+                serum_creatinine=3.0,
+                patient_age=65,
+                is_female=False,
+                current_medications=[],
+                known_allergies=[]
+            )
+            if res["status"] == "BLOCKED":
+                return True, f"INTERCEPTED: {res['hard_stops'][0]}"
 
-        # 4. Evaluate Pediatric Overdose
+        # 4. Evaluate Pediatric Overdose directly via production NICUPediatricEngine
         elif cat == "PEDIATRIC_DOSE_GUARD":
-            weight = test_case.get("patient_weight_kg", 0.0)
             dose = test_case.get("attempted_dose_mg", 0.0)
-            drug = test_case["prescribed_drug"].lower()
-            if "paracetamol" in drug:
-                max_safe_dose = weight * 15.0  # 15 mg/kg per dose
-                if dose > max_safe_dose * 1.5:  # Over 150% max safe single dose
-                    return True, f"INTERCEPTED: Massive pediatric overdose {dose}mg ordered (Max safe for {weight}kg is {max_safe_dose}mg)."
+            try:
+                self.nicu.validate_and_calculate_dose(
+                    patient_id="NEO-REG-01",
+                    drug_id="DRUG-PARACETAMOL-IV",
+                    prescribed_absolute_dose_mg=dose,
+                    clinician_id="DOC-REG-01"
+                )
+            except NeonatalDoseToxicityError as e:
+                return True, f"INTERCEPTED: {str(e)}"
 
         return False, "NO_INTERCEPTION_ALLOWED"
 
