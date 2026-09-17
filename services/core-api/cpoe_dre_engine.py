@@ -12,6 +12,15 @@ import uuid
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime, timezone
 
+try:
+    from terminology_engine import normalize_drug_name
+except ImportError:
+    try:
+        from services.core_api.terminology_engine import normalize_drug_name
+    except ImportError:
+        def normalize_drug_name(x: str) -> str:
+            return x.lower().strip() if x else ""
+
 # Lifetime cumulative dosage safety ceilings
 LIFETIME_TOXICITY_LIMITS = {
     "doxorubicin": {"max_lifetime_mg_m2": 450.0, "organ": "CARDIAC_HEART_FAILURE"},
@@ -104,7 +113,7 @@ class CPOEDREEngine:
         self._patient_lifetime_doses: Dict[str, Dict[str, float]] = {} # patient_id -> drug -> cumulative_dose
 
     def record_administered_dose(self, patient_id: str, drug_name: str, dose_amount: float):
-        drug_key = drug_name.lower().strip()
+        drug_key = normalize_drug_name(drug_name) or drug_name.lower().strip()
         if patient_id not in self._patient_lifetime_doses:
             self._patient_lifetime_doses[patient_id] = {}
         curr = self._patient_lifetime_doses[patient_id].get(drug_key, 0.0)
@@ -130,11 +139,21 @@ class CPOEDREEngine:
         Sub-millisecond DRE evaluation:
         Checks DDI, Allergies, Renal Dose Adjustments, Cumulative Lifetime Toxicity,
         Pregnancy Teratogenicity, and Geriatric AGS Beers Criteria 2023.
+        Standardizes commercial brand names and clinical aliases to active generic INN.
         """
         hard_stops = []
         warnings = []
-        drug_lower = drug_name.lower().strip()
+        raw_drug_lower = drug_name.lower().strip()
+        drug_norm = normalize_drug_name(raw_drug_lower)
+        # Combined search targets for prescribed drug
+        drug_lower = f"{raw_drug_lower} {drug_norm}".strip() if drug_norm else raw_drug_lower
+
+        # Meds list containing both raw and normalized generic forms
         meds_lower = [m.lower().strip() for m in current_medications]
+        for m in current_medications:
+            norm_m = normalize_drug_name(m)
+            if norm_m and norm_m not in meds_lower:
+                meds_lower.append(norm_m)
 
         # 1. Extended Drug-Drug Interactions (DDI) Matrix
         # Sildenafil + Nitrates
@@ -229,9 +248,10 @@ class CPOEDREEngine:
                     )
 
         # 6. Cumulative Lifetime Toxicity Check
-        if drug_lower in LIFETIME_TOXICITY_LIMITS:
-            limit_data = LIFETIME_TOXICITY_LIMITS[drug_lower]
-            prior_dose = self._patient_lifetime_doses.get(patient_id, {}).get(drug_lower, 0.0)
+        tox_drug = drug_norm if drug_norm in LIFETIME_TOXICITY_LIMITS else (raw_drug_lower if raw_drug_lower in LIFETIME_TOXICITY_LIMITS else None)
+        if tox_drug:
+            limit_data = LIFETIME_TOXICITY_LIMITS[tox_drug]
+            prior_dose = self._patient_lifetime_doses.get(patient_id, {}).get(tox_drug, 0.0)
             if "max_lifetime_units" in limit_data:
                 # Cumulative absolute units (e.g. Bleomycin: 400 units ceiling)
                 attempted_dose = prescribed_dose

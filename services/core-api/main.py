@@ -21,6 +21,8 @@ except ImportError:
     HAS_FASTAPI = False
 
 from db_session import outbox_manager, db_config
+from auth_manager import auth_security_manager
+from audit_ledger import audit_ledger
 from cpoe_dre_engine import CPOEDREEngine
 from structured_history_engine import StructuredHistoryEngine, ChiefComplaintCategory
 from syndromic_protocol_engine import SyndromicProtocolEngine, SyndromicArchetype
@@ -135,16 +137,23 @@ if HAS_FASTAPI:
 
     @app.post("/api/v1/auth/token", summary="Authenticate Clinical Staff & Issue Contextual JWT")
     async def authenticate_staff(req: TokenRequest):
-        import hmac, hashlib
-        sig = hmac.new(b"HOSPITAL-SIGNING-KEY-2026", f"{req.username}:{req.tenant_id}".encode(), hashlib.sha256).hexdigest()
+        user_info = auth_security_manager.verify_credentials(req.username, req.password)
+        if not user_info:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid username or password"
+            )
+        token = auth_security_manager.create_access_token(
+            username=user_info["username"],
+            tenant_id=req.tenant_id,
+            role=user_info["role"],
+            permissions=user_info["permissions"]
+        )
         return {
-            "token": f"JWT-{sig}",
+            "token": token,
             "expires_in": 28800,
-            "role": "CONSULTANT_PHYSICIAN",
-            "permissions": [
-                "view_clinical_chart", "edit_clinical_chart", "order_medications",
-                "order_labs", "order_procedures", "sign_discharge"
-            ]
+            "role": user_info["role"],
+            "permissions": user_info["permissions"]
         }
 
     @app.post("/api/v1/safety/evaluate-order", summary="Sub-millisecond DRE Clinical Safety Verification")
@@ -185,6 +194,24 @@ if HAS_FASTAPI:
         eval_us = round((time.perf_counter() - t0) * 1_000_000, 2)
         status_str = "BLOCKED" if all_hard_stops else ("WARNING_REQUIRES_OVERRIDE" if all_warnings else "APPROVED")
 
+        # Record tamper-evident cryptographic audit event
+        try:
+            audit_ledger.record_event(
+                tenant_id=x_tenant_id or "TENANT-MAIN-01",
+                event_type="CLINICAL_ORDER_EVALUATION",
+                aggregate_id=req.patient_id,
+                actor_id=req.clinician_id,
+                payload={
+                    "status": status_str,
+                    "items": [{"code": it.code, "name": it.name, "dose": it.dose, "route": it.route} for it in req.items],
+                    "hard_stops_count": len(all_hard_stops),
+                    "warnings_count": len(all_warnings),
+                    "evaluated_in_microseconds": eval_us
+                }
+            )
+        except Exception:
+            pass
+
         return {
             "status": status_str,
             "hard_stops": all_hard_stops,
@@ -207,6 +234,22 @@ if HAS_FASTAPI:
             is_pregnant=req.is_pregnant or False
         )
         history_engine.process_responses(sess, req.answers)
+
+        try:
+            audit_ledger.record_event(
+                tenant_id="TENANT-MAIN-01",
+                event_type="STRUCTURED_HISTORY_INTAKE",
+                aggregate_id=sess.patient_id,
+                actor_id=sess.session_id,
+                payload={
+                    "complaint": complaint.value if hasattr(complaint, "value") else str(complaint),
+                    "active_red_flags": sess.active_red_flags,
+                    "findings_count": len(sess.findings)
+                }
+            )
+        except Exception:
+            pass
+
         return {
             "session_id": sess.session_id,
             "patient_id": sess.patient_id,
@@ -243,6 +286,22 @@ if HAS_FASTAPI:
             is_pregnant=req.is_pregnant or False,
             estimated_transit_hours=req.estimated_transit_hours or 6.0
         )
+
+        try:
+            audit_ledger.record_event(
+                tenant_id="TENANT-MAIN-01",
+                event_type="SYNDROMIC_HOLDING_PLAN_GENERATION",
+                aggregate_id=plan.patient_id,
+                actor_id=plan.plan_id,
+                payload={
+                    "syndrome": plan.syndrome.value if hasattr(plan.syndrome, "value") else str(plan.syndrome),
+                    "urgency_tier": plan.urgency_tier,
+                    "estimated_transit_hours": plan.estimated_transit_hours
+                }
+            )
+        except Exception:
+            pass
+
         return {
             "plan_id": plan.plan_id,
             "patient_id": plan.patient_id,
@@ -330,7 +389,7 @@ else:
             known_allergies: Optional[List[str]] = None,
             is_pregnant: bool = False
         ) -> Dict[str, Any]:
-            return dre_engine.evaluate_order(
+            res = dre_engine.evaluate_order(
                 patient_id=patient_id,
                 drug_name=drug_name,
                 prescribed_dose=prescribed_dose,
@@ -344,6 +403,17 @@ else:
                 known_allergies=known_allergies or [],
                 is_pregnant=is_pregnant
             )
+            try:
+                audit_ledger.record_event(
+                    tenant_id="TENANT-MAIN-01",
+                    event_type="CLINICAL_ORDER_EVALUATION",
+                    aggregate_id=patient_id,
+                    actor_id="SHIM-CALLER",
+                    payload={"status": res.get("status"), "drug_name": drug_name, "prescribed_dose": prescribed_dose}
+                )
+            except Exception:
+                pass
+            return res
 
         def process_history_intake(
             self,
@@ -358,6 +428,16 @@ else:
             complaint = getattr(ChiefComplaintCategory, chief_complaint, ChiefComplaintCategory.TRAUMA_OR_FALL)
             sess = history_engine.initiate_session(session_id, patient_id, complaint, patient_age, is_female, is_pregnant)
             history_engine.process_responses(sess, answers)
+            try:
+                audit_ledger.record_event(
+                    tenant_id="TENANT-MAIN-01",
+                    event_type="STRUCTURED_HISTORY_INTAKE",
+                    aggregate_id=patient_id,
+                    actor_id=session_id,
+                    payload={"complaint": complaint.value if hasattr(complaint, "value") else str(complaint), "red_flags": sess.active_red_flags}
+                )
+            except Exception:
+                pass
             return sess.__dict__
 
         def generate_syndromic_plan(
@@ -372,6 +452,16 @@ else:
         ) -> Dict[str, Any]:
             synd = getattr(SyndromicArchetype, syndrome, SyndromicArchetype.SEVERE_TRAUMA_FRACTURE)
             plan = protocol_engine.generate_holding_plan(patient_id, synd, patient_age, is_female, patient_weight_kg, vitals, [], [], False, estimated_transit_hours)
+            try:
+                audit_ledger.record_event(
+                    tenant_id="TENANT-MAIN-01",
+                    event_type="SYNDROMIC_HOLDING_PLAN_GENERATION",
+                    aggregate_id=patient_id,
+                    actor_id=plan.plan_id,
+                    payload={"syndrome": synd.value if hasattr(synd, "value") else str(synd), "urgency": plan.urgency_tier}
+                )
+            except Exception:
+                pass
             return plan.__dict__
 
         def compute_emergency_score(self, score_type: str, **kwargs) -> Dict[str, Any]:

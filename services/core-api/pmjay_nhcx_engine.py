@@ -10,7 +10,16 @@ Operational Scope:
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, List, Optional, Any
+
+
+def to_dec(val: Any) -> Decimal:
+    return Decimal(str(val))
+
+
+def quantize_inr(val: Decimal) -> Decimal:
+    return val.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 class PMJAYError(Exception):
@@ -142,14 +151,23 @@ class PMJAYNHCXEngine:
             )
 
         # Allow non-bundled specialized exclusions if explicitly contracted (e.g. specialized implants)
+        amt_dec = quantize_inr(to_dec(amount_inr))
         entry = {
             "item_name": item_name,
             "category": category,
-            "amount_inr": amount_inr,
+            "amount_inr": float(amt_dec),
             "added_at": datetime.now(timezone.utc).isoformat()
         }
         enc.billed_items.append(entry)
         return entry
+
+    def get_total_billed_addons(self, encounter_id: str) -> float:
+        """Returns the total sum of authorized specialized addons in INR."""
+        enc = self.encounters.get(encounter_id)
+        if not enc:
+            raise PMJAYError(f"Encounter {encounter_id} is not an active PM-JAY patient.")
+        total_dec = sum(to_dec(i["amount_inr"]) for i in enc.billed_items)
+        return float(quantize_inr(to_dec(total_dec)))
 
     def scan_nhcx_claim_denial_risk(
         self,

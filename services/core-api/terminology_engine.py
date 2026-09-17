@@ -89,3 +89,247 @@ _engine = TerminologyEngine()
 
 def get_terminology_engine() -> TerminologyEngine:
     return _engine
+
+
+import re
+
+# ====================================================================================================
+# BRAND-TO-GENERIC ACTIVE PHARMACEUTICAL INGREDIENT (API) INDEX
+# Comprehensive dictionary spanning Indian market brands and US FDA / International trade names
+# ====================================================================================================
+BRAND_TO_GENERIC_MAP: Dict[str, str] = {
+    # PDE5 Inhibitors (Fatal DDI with Nitrates)
+    "caverta": "sildenafil",
+    "penegra": "sildenafil",
+    "viagra": "sildenafil",
+    "revatio": "sildenafil",
+    "kamagra": "sildenafil",
+    "silagra": "sildenafil",
+    "manforce": "sildenafil",
+    "cialis": "tadalafil",
+    "megalis": "tadalafil",
+    "forzest": "tadalafil",
+    "levitra": "vardenafil",
+
+    # Nitrates (Fatal DDI with PDE5 Inhibitors)
+    "sorbitrate": "isosorbide dinitrate",
+    "isordil": "isosorbide dinitrate",
+    "monotrate": "isosorbide mononitrate",
+    "imdur": "isosorbide mononitrate",
+    "angispan": "nitroglycerin",
+    "nitrolingual": "nitroglycerin",
+    "nitrocontin": "nitroglycerin",
+    "glyceryl trinitrate": "nitroglycerin",
+
+    # NSAIDs (Lethal DDI with Warfarin / ulcerogenic)
+    "dynapar": "diclofenac",
+    "voveran": "diclofenac",
+    "voltaren": "diclofenac",
+    "combiflam": "ibuprofen",
+    "brufen": "ibuprofen",
+    "advil": "ibuprofen",
+    "motrin": "ibuprofen",
+    "naprosyn": "naproxen",
+    "aleve": "naproxen",
+    "toradol": "ketorolac",
+    "ketorol": "ketorolac",
+    "indocin": "indomethacin",
+    "mobic": "meloxicam",
+    "feldene": "piroxicam",
+    "disprin": "aspirin",
+    "ecospirin": "aspirin",
+    "ecosprin": "aspirin",
+    "aspirin": "aspirin",
+    "bayer": "aspirin",
+
+    # Anticoagulants
+    "uniwarfin": "warfarin",
+    "coumadin": "warfarin",
+    "jantoven": "warfarin",
+    "warfar": "warfarin",
+    "clexane": "enoxaparin",
+    "lovenox": "enoxaparin",
+    "eliquis": "apixaban",
+    "xarelto": "rivaroxaban",
+    "pradaxa": "dabigatran",
+
+    # Antibiotics / Oxazolidinones / Folate Antagonists
+    "zyvox": "linezolid",
+    "linospan": "linezolid",
+    "lizomac": "linezolid",
+    "bactrim": "trimethoprim-sulfamethoxazole",
+    "septra": "trimethoprim-sulfamethoxazole",
+    "septrin": "trimethoprim-sulfamethoxazole",
+    "cotrimoxazole": "trimethoprim-sulfamethoxazole",
+    "augmentin": "amoxicillin-clavulanate",
+    "moxikind-cv": "amoxicillin-clavulanate",
+    "clavum": "amoxicillin-clavulanate",
+    "amoxil": "amoxicillin",
+    "omnipen": "ampicillin",
+    "pipracil": "piperacillin",
+    "tazocin": "piperacillin-tazobactam",
+    "rocephin": "ceftriaxone",
+    "monocef": "ceftriaxone",
+    "ancef": "cefazolin",
+    "kefzol": "cefazolin",
+    "claforan": "cefotaxime",
+    "taxim": "cefotaxime",
+    "maxipime": "cefepime",
+    "suprax": "cefixime",
+    "zifi": "cefixime",
+    "cipro": "ciprofloxacin",
+    "ciplox": "ciprofloxacin",
+    "cifran": "ciprofloxacin",
+    "levaquin": "levofloxacin",
+    "levomac": "levofloxacin",
+    "l-cin": "levofloxacin",
+    "avelox": "moxifloxacin",
+    "moxicip": "moxifloxacin",
+
+    # Antidepressants (SSRIs / SNRIs)
+    "prozac": "fluoxetine",
+    "fludac": "fluoxetine",
+    "zoloft": "sertraline",
+    "daxid": "sertraline",
+    "paxil": "paroxetine",
+    "parotin": "paroxetine",
+    "celexa": "citalopram",
+    "celica": "citalopram",
+    "lexapro": "escitalopram",
+    "cipralex": "escitalopram",
+    "nexito": "escitalopram",
+    "effexor": "venlafaxine",
+    "venlor": "venlafaxine",
+    "cymbalta": "duloxetine",
+    "dulane": "duloxetine",
+
+    # Antiplatelet & PPIs
+    "plavix": "clopidogrel",
+    "clopilet": "clopidogrel",
+    "deplatt": "clopidogrel",
+    "omez": "omeprazole",
+    "prilosec": "omeprazole",
+    "losec": "omeprazole",
+    "nexium": "esomeprazole",
+    "esomac": "esomeprazole",
+    "pantocid": "pantoprazole",
+    "pan": "pantoprazole",
+    "protonix": "pantoprazole",
+
+    # Antihypertensives / ACEi / ARBs / Diuretics
+    "cardace": "ramipril",
+    "altace": "ramipril",
+    "vasotec": "enalapril",
+    "envas": "enalapril",
+    "prinivil": "lisinopril",
+    "zestril": "lisinopril",
+    "listril": "lisinopril",
+    "cozaar": "losartan",
+    "losar": "losartan",
+    "covance": "losartan",
+    "telma": "telmisartan",
+    "micardis": "telmisartan",
+    "telmikem": "telmisartan",
+    "diovan": "valsartan",
+    "valzaar": "valsartan",
+    "aldactone": "spironolactone",
+    "aldostig": "spironolactone",
+    "inspra": "eplerenone",
+    "eptus": "eplerenone",
+    "k-bind": "potassium chloride",
+    "potcl": "potassium chloride",
+
+    # Cardiac / Antiarrhythmics
+    "lanoxin": "digoxin",
+    "cordarone": "amiodarone",
+    "betapace": "sotalol",
+    "haldol": "haloperidol",
+    "zofran": "ondansetron",
+    "emset": "ondansetron",
+
+    # Antidiabetic
+    "glucophage": "metformin",
+    "glycomet": "metformin",
+    "glybovin": "glibenclamide",
+
+    # Oncology / Chemotherapy
+    "adriblastina": "doxorubicin",
+    "adriamycin": "doxorubicin",
+    "blenoxane": "bleomycin",
+    "platinol": "cisplatin",
+    "trexall": "methotrexate",
+    "folitrax": "methotrexate",
+
+    # Teratogens (FDA Pregnancy Category D/X)
+    "accutane": "isotretinoin",
+    "isotroin": "isotretinoin",
+    "depakote": "sodium valproate",
+    "valparin": "sodium valproate",
+    "encorate": "sodium valproate",
+    "lipitor": "atorvastatin",
+    "atorva": "atorvastatin",
+    "atorlip": "atorvastatin",
+    "crestor": "rosuvastatin",
+    "rosuvas": "rosuvastatin",
+    "rozavel": "rosuvastatin",
+    "zocor": "simvastatin",
+    "simvotin": "simvastatin",
+
+    # Beers Criteria Geriatric High-Risk
+    "atarax": "hydroxyzine",
+    "benadryl": "diphenhydramine",
+    "zeet": "chlorpheniramine",
+    "piriton": "chlorpheniramine",
+    "phenergan": "promethazine",
+    "avomine": "promethazine",
+    "valium": "diazepam",
+    "calmpose": "diazepam",
+    "librium": "chlordiazepoxide",
+    "klonopin": "clonazepam",
+    "rivotril": "clonazepam",
+    "zapiz": "clonazepam",
+    "elavil": "amitriptyline",
+    "tryptomer": "amitriptyline"
+}
+
+
+def normalize_drug_name(raw_name: str) -> str:
+    """
+    Standardizes commercial brand names and clinical aliases to active generic INN.
+    Strips formulation suffixes, dosage numbers, and route qualifiers.
+    Sub-millisecond lookup guarantee.
+    """
+    if not raw_name or not isinstance(raw_name, str):
+        return ""
+
+    cleaned = raw_name.lower().strip()
+
+    # Direct match in brand map
+    if cleaned in BRAND_TO_GENERIC_MAP:
+        return BRAND_TO_GENERIC_MAP[cleaned]
+
+    # Split on whitespace/punctuation to check tokens
+    tokens = re.split(r"[\s\-_/,+]+", cleaned)
+    for token in tokens:
+        # Check token without trailing dosage units (e.g. "50mg", "100mcg")
+        clean_token = re.sub(r"\d+(\.\d+)?(mg|mcg|g|ml|iu|u|%|meq)?$", "", token).strip()
+        if clean_token in BRAND_TO_GENERIC_MAP:
+            return BRAND_TO_GENERIC_MAP[clean_token]
+        if token in BRAND_TO_GENERIC_MAP:
+            return BRAND_TO_GENERIC_MAP[token]
+
+    # Check compound substring matches for known brands
+    for brand, generic in BRAND_TO_GENERIC_MAP.items():
+        if len(brand) >= 4 and brand in cleaned:
+            return generic
+
+    # Return normalized clean name if not a known brand
+    stripped = re.sub(r"\b(tab|tablet|cap|capsule|inj|injection|syp|syrup|iv|im|po|oral|prn|stat|od|bd|tid|qid|\d+mg|\d+mcg|\d+g|\d+ml)\b", "", cleaned).strip()
+    return stripped if stripped else cleaned
+
+
+def get_drug_aliases(generic_name: str) -> List[str]:
+    """Returns all registered brand names mapped to the given generic drug."""
+    target = generic_name.lower().strip()
+    return [brand for brand, generic in BRAND_TO_GENERIC_MAP.items() if generic == target]
+

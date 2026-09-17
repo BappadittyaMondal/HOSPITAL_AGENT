@@ -11,9 +11,20 @@ Operational Scope:
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, List, Optional, Any
 import hashlib
 import json
+
+
+def to_dec(val: Any) -> Decimal:
+    """Converts a scalar or numeric string safely to Decimal."""
+    return Decimal(str(val))
+
+
+def quantize_inr(val: Decimal) -> Decimal:
+    """Quantizes currency strictly to 2 decimal places with standard financial ROUND_HALF_UP."""
+    return val.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
 class BillingError(Exception):
@@ -94,7 +105,9 @@ class DynamicBillingEngine:
         if not item:
             raise BillingError(f"Service code {service_code} not found in tariff master.")
         multiplier = self.WARD_TIER_MULTIPLIERS.get(ward_tier.upper(), 1.0)
-        return round(item.base_price * multiplier, 2)
+        base = to_dec(item.base_price)
+        mult = to_dec(multiplier)
+        return float(quantize_inr(base * mult))
 
     def generate_pretreatment_cost_estimate(
         self,
@@ -104,30 +117,31 @@ class DynamicBillingEngine:
     ) -> Dict[str, Any]:
         """Generates pre-treatment cost estimate provided to patients upon admission."""
         multiplier = self.WARD_TIER_MULTIPLIERS.get(ward_tier.upper(), 1.0)
+        mult_dec = to_dec(multiplier)
         breakdown = []
-        total_estimate = 0.0
+        total_estimate_dec = Decimal("0.00")
 
         for code in service_codes:
             item = self.tariff_master.get(code)
             if item:
-                price = round(item.base_price * multiplier, 2)
-                gst = round(price * (item.gst_rate_pct / 100.0), 2)
-                subtotal = price + gst
-                total_estimate += subtotal
+                price_dec = quantize_inr(to_dec(item.base_price) * mult_dec)
+                gst_dec = quantize_inr(price_dec * (to_dec(item.gst_rate_pct) / Decimal("100.0")))
+                subtotal_dec = price_dec + gst_dec
+                total_estimate_dec += subtotal_dec
                 breakdown.append({
                     "service_code": code,
                     "service_name": item.service_name,
                     "sac_code": item.sac_code,
-                    "unit_price": price,
-                    "gst": gst,
-                    "subtotal": subtotal
+                    "unit_price": float(price_dec),
+                    "gst": float(gst_dec),
+                    "subtotal": float(subtotal_dec)
                 })
 
         return {
             "ward_tier": ward_tier,
             "expected_days": expected_days,
             "breakdown": breakdown,
-            "total_estimated_cost": round(total_estimate, 2)
+            "total_estimated_cost": float(quantize_inr(total_estimate_dec))
         }
 
     def create_invoice(self, invoice_id: str, patient_id: str, encounter_id: str, ward_tier: str) -> PatientInvoice:
@@ -154,17 +168,19 @@ class DynamicBillingEngine:
 
         price = self.compute_tiered_price(service_code, inv.ward_tier)
         item = self.tariff_master[service_code]
-        gst = round((price * quantity) * (item.gst_rate_pct / 100.0), 2)
-        total = round((price * quantity) + gst, 2)
+        price_dec = to_dec(price)
+        qty_dec = to_dec(quantity)
+        gst_dec = quantize_inr((price_dec * qty_dec) * (to_dec(item.gst_rate_pct) / Decimal("100.0")))
+        total_dec = quantize_inr((price_dec * qty_dec) + gst_dec)
 
         line = InvoiceLineItem(
             line_id=f"LINE-{len(inv.lines)+1}",
             service_code=service_code,
             service_name=item.service_name,
             quantity=quantity,
-            unit_price=price,
-            gst_amount=gst,
-            total_amount=total,
+            unit_price=float(price_dec),
+            gst_amount=float(gst_dec),
+            total_amount=float(total_dec),
             category=category
         )
         inv.lines.append(line)
@@ -185,7 +201,9 @@ class DynamicBillingEngine:
         if not inv:
             raise BillingError(f"Invoice {invoice_id} not found.")
 
-        pct = (discount_amount / inv.total_gross * 100.0) if inv.total_gross > 0 else 0.0
+        gross_dec = to_dec(inv.total_gross)
+        disc_dec = to_dec(discount_amount)
+        pct = float(disc_dec / gross_dec * Decimal("100.0")) if gross_dec > Decimal("0.00") else 0.0
         if pct > 10.0:
             if not approving_authority_id or approving_authority_id == requesting_staff_id:
                 raise DiscountAuthorizationError(
@@ -193,17 +211,18 @@ class DynamicBillingEngine:
                     f"Mandatory independent sign-off by Medical Superintendent / CFO required."
                 )
 
-        inv.discount_amount = discount_amount
+        inv.discount_amount = float(quantize_inr(disc_dec))
         inv.discount_authorized_by = approving_authority_id or requesting_staff_id
         self._recalculate_totals(inv)
 
     def _recalculate_totals(self, inv: PatientInvoice):
-        gross = sum(l.unit_price * l.quantity for l in inv.lines)
-        gst = sum(l.gst_amount for l in inv.lines)
-        net = max(0.0, (gross + gst) - inv.discount_amount)
-        inv.total_gross = round(gross, 2)
-        inv.total_gst = round(gst, 2)
-        inv.total_net = round(net, 2)
+        gross_dec = quantize_inr(sum(to_dec(l.unit_price) * to_dec(l.quantity) for l in inv.lines))
+        gst_dec = quantize_inr(sum(to_dec(l.gst_amount) for l in inv.lines))
+        disc_dec = to_dec(inv.discount_amount)
+        net_dec = quantize_inr(max(Decimal("0.00"), (gross_dec + gst_dec) - disc_dec))
+        inv.total_gross = float(gross_dec)
+        inv.total_gst = float(gst_dec)
+        inv.total_net = float(net_dec)
 
     def orchestrate_parallel_discharge_settlement(
         self,

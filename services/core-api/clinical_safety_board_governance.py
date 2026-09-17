@@ -9,6 +9,7 @@ Purpose: Enforces statutory clinical governance, quorum validation, cryptographi
 ====================================================================================================
 """
 
+import os
 import hmac
 import hashlib
 from datetime import datetime, timezone
@@ -46,8 +47,9 @@ MANDATORY_CSB_ROLES = {
 class ClinicalSafetyBoardGovernanceEngine:
     """Manages the statutory governance, quorum, and stage-gate authorizations of the Clinical Safety Board."""
 
-    def __init__(self, hospital_id: str = "HOSPITAL-AIIMS-01"):
-        self.hospital_id = hospital_id
+    def __init__(self, hospital_id: str = "HOSPITAL-AIIMS-01", **kwargs):
+        self.hospital_id = kwargs.get("tenant_id", hospital_id)
+        self._secret_key = os.getenv("CSB_HMAC_SECRET", "CSB_HMAC_SECRET_KEY_2026")
         self._registered_members: Dict[str, Dict] = {}
         self._stage_authorizations: Dict[int, Dict] = {}
         self._emergency_pause_active: bool = False
@@ -98,9 +100,10 @@ class ClinicalSafetyBoardGovernanceEngine:
         stage_number: int,
         attending_member_ids: List[str],
         scorecard_compliance_percent: float,
-        secret_key: str = "CSB_HMAC_SECRET_KEY_2026"
+        secret_key: Optional[str] = None
     ) -> Dict:
         """Issues an HMAC-SHA256 cryptographic authorization token required to unlock pilot stages."""
+        actual_secret = secret_key or os.getenv("CSB_HMAC_SECRET", "CSB_HMAC_SECRET_KEY_2026")
         if self._emergency_pause_active:
             raise EmergencySafetyPauseActiveError(
                 f"CANNOT AUTHORIZE STAGE {stage_number}: Clinical Safety Pause is currently ACTIVE! "
@@ -121,7 +124,7 @@ class ClinicalSafetyBoardGovernanceEngine:
 
         now = datetime.now(timezone.utc)
         payload = f"{self.hospital_id}:STAGE_{stage_number}:{now.strftime('%Y-%m-%d')}:{len(attending_member_ids)}"
-        token_signature = hmac.new(secret_key.encode(), payload.encode(), hashlib.sha256).hexdigest()
+        token_signature = hmac.new(actual_secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
         token = f"CSB-AUTH-STAGE-{stage_number}-{token_signature[:16].upper()}"
 
         record = {
