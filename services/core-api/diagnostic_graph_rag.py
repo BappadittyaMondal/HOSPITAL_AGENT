@@ -119,6 +119,76 @@ CONCEPT_ONTOLOGY_REGISTRY: Dict[str, Dict] = {
         "preferred_term": "Neck stiffness / Meningism",
         "aliases": ["neck stiffness", "meningismus", "nuchal rigidity", "ghardan akdan"],
         "category": "FINDING"
+    },
+    "21522000": {
+        "snomed_id": "21522000",
+        "hpo_id": "HP:0002027",
+        "preferred_term": "Abdominal pain",
+        "aliases": ["abdominal pain", "stomach pain", "belly ache", "পেটে ব্যথা", "pet dard", "pet mein dard"],
+        "category": "FINDING"
+    },
+    "163428003": {
+        "snomed_id": "163428003",
+        "hpo_id": "HP:0031979",
+        "preferred_term": "Abdominal rigidity",
+        "aliases": ["abdominal rigidity", "involuntary guarding", "board-like abdomen", "peritoneal irritation", "পেট শক্ত", "pet tight"],
+        "category": "FINDING"
+    },
+    "419045004": {
+        "snomed_id": "419045004",
+        "hpo_id": "HP:0001279",
+        "preferred_term": "Loss of consciousness",
+        "aliases": ["loss of consciousness", "syncope", "fainting", "passed out", "blackout", "অজ্ঞান", "behoshi", "chakkar aakar behosh"],
+        "category": "FINDING"
+    },
+    "68569003": {
+        "snomed_id": "68569003",
+        "hpo_id": "HP:0001269",
+        "preferred_term": "Hemiparesis / Limb weakness",
+        "aliases": ["limb weakness", "hemiparesis", "arm weakness", "leg weakness", "one sided weakness", "হাত পায়ে দুর্বলতা", "haath pair mein kamzori"],
+        "category": "FINDING"
+    },
+    "275322007": {
+        "snomed_id": "275322007",
+        "hpo_id": "HP:0000308",
+        "preferred_term": "Facial droop",
+        "aliases": ["facial droop", "facial asymmetry", "mouth deviation", "facial weakness", "মুখ বাঁকা", "muh tedha"],
+        "category": "FINDING"
+    },
+    "289190003": {
+        "snomed_id": "289190003",
+        "hpo_id": "HP:0001260",
+        "preferred_term": "Dysarthria / Slurred speech",
+        "aliases": ["slurred speech", "dysarthria", "speech difficulty", "garbled speech", "কথা জড়িয়ে যাওয়া", "awaaz ladkhadana"],
+        "category": "FINDING"
+    },
+    "125605004": {
+        "snomed_id": "125605004",
+        "hpo_id": "HP:0002757",
+        "preferred_term": "Bone fracture / Limb deformity",
+        "aliases": ["bone fracture", "broken bone", "limb deformity", "femur fracture", "neck fracture", "হাড় ভাঙা", "haddi tootna"],
+        "category": "FINDING"
+    },
+    "283680004": {
+        "snomed_id": "283680004",
+        "hpo_id": "HP:0000001",
+        "preferred_term": "Snakebite wound",
+        "aliases": ["snakebite", "snake bite", "fang marks", "venomous bite", "সাপের কামড়", "saamp ka katna"],
+        "category": "FINDING"
+    },
+    "289637001": {
+        "snomed_id": "289637001",
+        "hpo_id": "HP:0000145",
+        "preferred_term": "Vaginal bleeding in pregnancy",
+        "aliases": ["vaginal bleeding", "antepartum hemorrhage", "postpartum hemorrhage", "pph", "যোনিপথে রক্তপাত", "garbhavastha mein khoon"],
+        "category": "FINDING"
+    },
+    "84757009": {
+        "snomed_id": "84757009",
+        "hpo_id": "HP:0001289",
+        "preferred_term": "Confusion / Altered mental status",
+        "aliases": ["confusion", "altered mental status", "disorientation", "delirium", "বিভ্রান্তি", "hosh mein na hona"],
+        "category": "FINDING"
     }
 }
 
