@@ -14,11 +14,6 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.23'
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -29,11 +24,6 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Run Go Vet & Staticcheck
-        run: |
-          cd services/core-api || exit 0
-          go vet ./... || true
-
       - name: Run Python Flake8 & Bandit (SAST)
         run: |
           pip install flake8 bandit
@@ -41,7 +31,7 @@ jobs:
           bandit -r services/ai-orchestrator services/core-api -ll -s B101,B104
 
   clinical-safety-regression:
-    name: 2. Mandatory Clinical Safety Rule Regression Block
+    name: 2. Mandatory Clinical Safety Rule Regression & Pytest Verification
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -52,10 +42,18 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Execute DRE 50,000 Safety Regression Tests
+      - name: Install Test Dependencies
+        run: |
+          pip install pytest httpx pydantic fastapi
+
+      - name: Execute DRE Canonical Clinical Safety Regression Tests (Zero-Tolerance Gate)
         run: |
           python scripts/run_clinical_safety_regression.py --strict --fail-on-violation
         # INVIOLABLE SAFETY GATE: Any regression in drug contraindications or lethal pairs halts the CI build
+
+      - name: Execute Full Pytest Regression Suite Across All Phases
+        run: |
+          pytest tests/ -v --tb=short
 
   database-migration-test:
     name: 3. Database Migration & RLS Tenant Isolation Verification

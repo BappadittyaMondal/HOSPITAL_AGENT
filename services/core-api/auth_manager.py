@@ -85,11 +85,30 @@ class AuthSecurityManager:
 
     def _initialize_default_credentials(self):
         """Initializes default certified clinical personnel credentials with unique salts."""
+        env_mode = os.getenv("HOSPITAL_ENV", "development").lower()
+        if env_mode in ("production", "prod"):
+            # S-02: Hardcoded default accounts prohibited in production unless explicitly provisioned via env
+            doc_pass = os.getenv("HOSPITAL_PROD_DOC_PASSWORD")
+            if doc_pass:
+                salt = os.urandom(16)
+                self._user_store["dr_sharma"] = {
+                    "salt": salt,
+                    "hash": self._hash_password(doc_pass, salt),
+                    "role": "CONSULTANT_PHYSICIAN",
+                    "permissions": [
+                        "view_clinical_chart", "edit_clinical_chart", "order_medications",
+                        "order_labs", "order_procedures", "sign_discharge"
+                    ]
+                }
+            return
+
+        # Development / Testing Mode Defaults
         # 1. Consultant Physician
         salt1 = os.urandom(16)
+        doc_dev_pass = os.getenv("HOSPITAL_DEV_DOC_PASS", "DoctorSecurePass@2026!")
         self._user_store["dr_sharma"] = {
             "salt": salt1,
-            "hash": self._hash_password("DoctorSecurePass@2026!", salt1),
+            "hash": self._hash_password(doc_dev_pass, salt1),
             "role": "CONSULTANT_PHYSICIAN",
             "permissions": [
                 "view_clinical_chart", "edit_clinical_chart", "order_medications",
@@ -99,9 +118,10 @@ class AuthSecurityManager:
 
         # 2. Registered Nurse
         salt2 = os.urandom(16)
+        nurse_dev_pass = os.getenv("HOSPITAL_DEV_NURSE_PASS", "NurseCarePass@2026!")
         self._user_store["nurse_priya"] = {
             "salt": salt2,
-            "hash": self._hash_password("NurseCarePass@2026!", salt2),
+            "hash": self._hash_password(nurse_dev_pass, salt2),
             "role": "REGISTERED_NURSE",
             "permissions": [
                 "view_clinical_chart", "administer_medications", "record_vitals"
@@ -110,9 +130,10 @@ class AuthSecurityManager:
 
         # 3. Community Health Worker / Paramedic
         salt3 = os.urandom(16)
+        chw_dev_pass = os.getenv("HOSPITAL_DEV_CHW_PASS", "RuralCHWPass@2026!")
         self._user_store["chw_anita"] = {
             "salt": salt3,
-            "hash": self._hash_password("RuralCHWPass@2026!", salt3),
+            "hash": self._hash_password(chw_dev_pass, salt3),
             "role": "COMMUNITY_HEALTH_WORKER",
             "permissions": [
                 "view_clinical_chart", "intake_history", "generate_holding_plan",
@@ -122,9 +143,10 @@ class AuthSecurityManager:
 
         # 4. CI/CD Contract Test User
         salt4 = os.urandom(16)
+        test_user_pass = os.getenv("HOSPITAL_DEV_TEST_PASS", "pwd")
         self._user_store["test_user"] = {
             "salt": salt4,
-            "hash": self._hash_password("pwd", salt4),
+            "hash": self._hash_password(test_user_pass, salt4),
             "role": "CONSULTANT_PHYSICIAN",
             "permissions": [
                 "view_clinical_chart", "edit_clinical_chart", "order_medications",

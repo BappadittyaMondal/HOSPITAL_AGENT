@@ -165,10 +165,15 @@ class CPOEDREEngine:
                 meds_lower.append(norm_m)
 
         # 1. Extended Drug-Drug Interactions (DDI) Matrix
-        # Sildenafil + Nitrates
-        if "sildenafil" in drug_lower and any("nitroglycerin" in m or "isosorbide" in m for m in meds_lower):
-            hard_stops.append("FATAL DDI: Sildenafil combined with Nitrates causes lethal refractory syncope/hypotension.")
-        if ("nitroglycerin" in drug_lower or "isosorbide" in drug_lower) and any("sildenafil" in m or "tadalafil" in m for m in meds_lower):
+        # PDE5 Inhibitors (Sildenafil, Tadalafil, Vardenafil) + Nitrates (Symmetric evaluation)
+        pde5_list = ["sildenafil", "tadalafil", "vardenafil"]
+        nitrate_list = ["nitroglycerin", "isosorbide", "sorbitrate", "mononitrate"]
+        if any(p in drug_lower for p in pde5_list) and any(any(n in m for n in nitrate_list) for m in meds_lower):
+            if "sildenafil" in drug_lower:
+                hard_stops.append("FATAL DDI: Sildenafil combined with Nitrates causes lethal refractory syncope/hypotension.")
+            else:
+                hard_stops.append("FATAL DDI: PDE5 inhibitor combined with Nitrates causes lethal refractory syncope/hypotension.")
+        if any(n in drug_lower for n in nitrate_list) and any(any(p in m for p in pde5_list) for m in meds_lower):
             hard_stops.append("FATAL DDI: Nitrates combined with PDE5 inhibitors cause lethal refractory syncope/hypotension.")
 
         # Linezolid + SSRIs/SNRIs (Serotonin Syndrome)
@@ -240,12 +245,25 @@ class CPOEDREEngine:
         allergies_lower = [a.lower().strip() for a in known_allergies]
         if any(a in drug_lower or drug_lower in a for a in allergies_lower if len(a) >= 3):
             hard_stops.append(f"DOCUMENTED ALLERGY: Direct allergy contraindication ({drug_name} matches documented allergy).")
-        if any("penicillin" in a for a in allergies_lower) and any(b in drug_lower for b in ["amoxicillin", "ampicillin", "piperacillin"]):
-            hard_stops.append(f"LETHAL ALLERGY: Beta-lactam anaphylaxis risk ({drug_name} with documented penicillin allergy).")
-        if any("cephalosporin" in a for a in allergies_lower) and any(c in drug_lower for c in ["ceftriaxone", "cefazolin", "cefotaxime", "cefepime", "cefixime"]):
+
+        # Comprehensive Penicillin / Beta-lactam allergy mapping (C-04)
+        is_pcn_allergic = any(
+            p == a or p in a for a in allergies_lower for p in ["penicillin", "pcn", "beta-lactam", "betalactam"]
+        )
+        is_pcn_drug = any(
+            b in drug_lower for b in ["amoxicillin", "amoxycillin", "ampicillin", "piperacillin", "penicillin", "augmentin", "clavulanate", "co-amoxiclav"]
+        )
+        if is_pcn_allergic and is_pcn_drug:
+            hard_stops.append(f"LETHAL ALLERGY: Beta-lactam anaphylaxis risk ({drug_name} with documented Penicillin/PCN allergy).")
+
+        if any("cephalosporin" in a or "cef" in a for a in allergies_lower) and any(c in drug_lower for c in ["ceftriaxone", "cefazolin", "cefotaxime", "cefepime", "cefixime"]):
             hard_stops.append(f"DOCUMENTED ALLERGY: Cephalosporin allergy risk ({drug_name} with documented cephalosporin allergy).")
-        if any("sulfa" in a or "sulfo" in a for a in allergies_lower) and any(s in drug_lower for s in ["sulfamethoxazole", "cotrimoxazole", "bactrim"]):
+        if any("sulfa" in a or "sulfo" in a for a in allergies_lower) and any(s in drug_lower for s in ["sulfamethoxazole", "cotrimoxazole", "bactrim", "sulfasalazine"]):
             hard_stops.append(f"LETHAL ALLERGY: Sulfonamide anaphylaxis/SJS risk ({drug_name} with documented sulfonamide allergy).")
+
+        # NSAID allergy cross-reactivity
+        if any("nsaid" in a or "aspirin" in a for a in allergies_lower) and any(n in drug_lower for n in ["ibuprofen", "diclofenac", "naproxen", "ketorolac", "indomethacin", "aspirin"]):
+            hard_stops.append(f"DOCUMENTED ALLERGY: NSAID cross-reactivity risk ({drug_name} with documented NSAID allergy).")
 
         # 3. Renal Clearance & Dose Adjustment Check
         egfr = calculate_ckd_epi_egfr(serum_creatinine, patient_age, is_female)
@@ -302,7 +320,8 @@ class CPOEDREEngine:
                 nlem_eval = global_nlem_formulary_engine.screen_prescription_regimen(
                     drugs_prescribed=regimen,
                     patient_is_pregnant=is_pregnant,
-                    patient_egfr=egfr
+                    patient_egfr=egfr,
+                    patient_allergies=known_allergies
                 )
                 for v in nlem_eval.get("lethal_violations", []):
                     msg = f"NLEM DDI FATAL: {v.get('drug_pair', v.get('drug'))} - {v.get('clinical_consequence', v.get('warning', ''))}"
@@ -312,8 +331,8 @@ class CPOEDREEngine:
                     msg = f"NLEM WARNING: {w.get('drug_pair', w.get('drug'))} - {w.get('clinical_consequence', w.get('guideline', w.get('warning', '')))}"
                     if msg not in warnings:
                         warnings.append(msg)
-            except Exception:
-                pass
+            except Exception as e:
+                hard_stops.append(f"DRE_FAIL_CLOSED_HALT: Critical safety screening exception ({type(e).__name__}: {str(e)}). Drug order held.")
 
         status = "BLOCKED" if hard_stops else ("WARNINGS_EXIST" if warnings else "APPROVED")
         return {
