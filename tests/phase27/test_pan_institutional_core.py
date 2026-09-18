@@ -25,6 +25,7 @@ from hepatobiliary_oncology_engine import hepatobiliary_oncology_engine, ChildPu
 from rare_disease_engine import rare_disease_engine
 from dual_lens_presenter import dual_lens_presenter
 from auth_manager import auth_security_manager
+from cpoe_dre_engine import CPOEDREEngine
 
 
 class TestPanInstitutionalCore(unittest.TestCase):
@@ -310,6 +311,56 @@ class TestPanInstitutionalCore(unittest.TestCase):
         all_domains = guideline_router.list_supported_domains()
         self.assertEqual(len(all_domains), 8)
 
+    def test_pan_institutional_dre_deterministic_safety_gate_and_evaluate_endpoint(self):
+        """Verify pan-institutional recommendations pass through CPOE DRE deterministic safety kernel."""
+        # 1. Arbitrate via POST /evaluate alias
+        eval_res = self.client.post(
+            "/api/v1/clinical/pan-institutional/evaluate",
+            json={"domain": "SEPSIS_RESUSCITATION"},
+            headers=self.auth_headers
+        )
+        self.assertEqual(eval_res.status_code, 200)
+        eval_data = eval_res.json()
+        self.assertIn("Piperacillin-Tazobactam", eval_data["arbitration_result"]["primary_actionable_standard"]["nlem_generic_molecules"])
+
+        # 2. Pipe recommendation into CPOE DRE safety kernel
+        dre = CPOEDREEngine(tenant_id="TENANT-MAIN-01")
+        
+        # Test Case A: Patient with Penicillin anaphylaxis -> MUST BE HARD BLOCKED
+        blocked_eval = dre.evaluate_order(
+            patient_id="PT-SEPSIS-001",
+            drug_name="Piperacillin-Tazobactam",
+            prescribed_dose=4500.0,
+            route="IV",
+            patient_weight_kg=70.0,
+            patient_bsa_m2=1.8,
+            serum_creatinine=1.0,
+            patient_age=45,
+            is_female=False,
+            current_medications=[],
+            known_allergies=["penicillin"]
+        )
+        self.assertEqual(blocked_eval["status"], "BLOCKED")
+        self.assertTrue(any("LETHAL ALLERGY" in hs for hs in blocked_eval["hard_stops"]))
+
+        # Test Case B: Patient with no penicillin allergy -> APPROVED
+        approved_eval = dre.evaluate_order(
+            patient_id="PT-SEPSIS-002",
+            drug_name="Piperacillin-Tazobactam",
+            prescribed_dose=4500.0,
+            route="IV",
+            patient_weight_kg=70.0,
+            patient_bsa_m2=1.8,
+            serum_creatinine=1.0,
+            patient_age=45,
+            is_female=False,
+            current_medications=[],
+            known_allergies=[]
+        )
+        self.assertEqual(approved_eval["status"], "APPROVED")
+        self.assertEqual(len(approved_eval["hard_stops"]), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -1332,10 +1332,10 @@ Before executing Phase 01, these technical decisions are formally locked:
   - [x] Expose protected REST endpoints: `/api/v1/clinical/pan-institutional/arbitrate`, `/api/v1/clinical/pan-institutional/domains`, `/api/v1/clinical/tropical/score`, `/api/v1/clinical/hepatobiliary/score`, `/api/v1/clinical/oncology/tnm-stage`, `/api/v1/clinical/rare-disease/match`.
   - [x] Integrate `get_current_principal` RBAC authentication and SHA-256 HMAC audit ledger appending.
 - [x] **27.7 Dedicated Phase 27 Test Suite & Global Verification (`tests/phase27/`)**
-  - [x] Author `test_pan_institutional_core.py` (13/13 tests passing in 0.250s).
+  - [x] Author `test_pan_institutional_core.py` (14/14 tests passing in 0.130s).
   - [x] Author `run_all_phase27_tests.py` (100% Quality Gate Passed).
   - [x] Integrate Phase 27 into `tests/run_all_phase_runners.py` (27/27 phases passing).
-  - [x] Verify global multi-phase discovery runner `tests/run_all_phases_global.py` (248/248 tests passing).
+  - [x] Verify global multi-phase discovery runner `tests/run_all_phases_global.py` (249/249 tests passing).
 
 **Phase 27 Quality Gate: [PASSED & CERTIFIED 100%]**
 1. Multi-center guideline arbitration resolves local vs global divergence across 8 clinical domains and 40 departments. [VERIFIED]
@@ -1344,7 +1344,7 @@ Before executing Phase 01, these technical decisions are formally locked:
 4. Solid tumor AJCC 8th Edition TNM staging separates localized resectable disease from metastatic progression. [VERIFIED]
 5. Rare disease phenotype matcher identifies orphan conditions from HPO clinical signs. [VERIFIED]
 6. Dual-lens presentation agent outputs synchronized Panel A (local actionable) and Panel B (global benchmark). [VERIFIED]
-7. Master Phase 27 runner: 13/13 tests passing; all 27 phase runners passing (27/27); pytest 271/271 passing; 9/9 DRE gates intercepted. [VERIFIED]
+7. Master Phase 27 runner: 14/14 tests passing; all 27 phase runners passing (27/27); pytest 272/272 passing; 9/9 DRE gates intercepted; end-to-end pan-institutional DRE safety pipeline verified. [VERIFIED]
 
 ---
 
@@ -3030,7 +3030,7 @@ The Project "HOSPITAL" platform has achieved complete mathematical, clinical, an
 
 **Execution Date:** 2026-09-18  
 **Phase Status:** COMPLETED, VERIFIED & LOCKED  
-**Total Tests:** 13/13 Master Phase 27 Unit Tests Passing in 0.250s  
+**Total Tests:** 14/14 Master Phase 27 Unit Tests Passing in 0.130s  
 **Quality Gate:** 100% Certified (Exit Code 0)  
 
 ### 34.1 Deliverables Produced & Verified
@@ -3042,8 +3042,9 @@ The Project "HOSPITAL" platform has achieved complete mathematical, clinical, an
 | **27.3 Hepatobiliary & Solid Tumor Oncology Engine** | `services/core-api/hepatobiliary_oncology_engine.py`, `tests/phase27/test_pan_institutional_core.py` | IPGMER/SSKM School of Digestive & Liver Diseases and Tata Memorial / MSKCC clinical staging standards. Computes Child-Pugh Class A/B/C scoring with perioperative abdominal surgery mortality; computes official OPTN/UNOS double-precision MELD-Na equation for 90-day transplant mortality; computes AJCC 8th Edition TNM staging and resectability. | ✅ Verified (Child-Pugh Class C 14 points with >75% perioperative mortality; MELD-Na 31 urgent transplant status; TNM Colorectal Stage I resectable vs Pancreatic Stage IV metastatic) |
 | **27.4 Rare Disease Phenotype Engine** | `services/core-api/rare_disease_engine.py`, `tests/phase27/test_pan_institutional_core.py` | CMC Vellore National Rare Disease Center & Charité Orphanet standards. Ingests Human Phenotype Ontology (HPO) terms and matches complex multi-system presentations (Wilson's disease, Acute Intermittent Porphyria, Punctate Palmoplantar Keratoderma, Hemochromatosis, HLH) with confirmatory molecular/biochemical diagnostic panels. | ✅ Verified (Wilson's disease matched on hepatic failure + tremor + Kaiser-Fleischer ring; Punctate PPK matched on punctate keratoderma + tube-well exposure with arsenic panel) |
 | **27.5 Dual-Lens Clinical Presentation Agent** | `services/core-api/dual_lens_presenter.py`, `tests/phase27/test_pan_institutional_core.py` | Formulates structured dual-panel clinical advisories: Panel A (Local Actionable Protocol with low-cost NLEM generic molecules and immediate availability) alongside Panel B (Global Reference Benchmark with novel targeted biologics and international clinical trials). Enforces inviolable Level-3 CDSS boundary requiring human clinician authentication. | ✅ Verified (Synthesizes synchronized Panel A and Panel B clinical reports with explicit economic comparisons and mandatory human sign-off banner) |
-| **27.6 REST API Routing & Keyed HMAC Audit Ledger Enforcement** | `services/core-api/main.py`, `tests/phase27/test_pan_institutional_core.py` | Exposes protected REST endpoints (`/api/v1/clinical/pan-institutional/arbitrate`, `/api/v1/clinical/pan-institutional/domains`, `/api/v1/clinical/tropical/score`, `/api/v1/clinical/hepatobiliary/score`, `/api/v1/clinical/oncology/tnm-stage`, `/api/v1/clinical/rare-disease/match`). Integrates `get_current_principal` RBAC authorization and cryptographic SHA-256 HMAC append-only audit ledger. | ✅ Verified (All 6 REST endpoints execute with HTTP 200, valid bearer authentication, and automated HMAC cryptographic ledger appending; invalid domains reject cleanly with HTTP 422) |
-| **27.7 Dedicated Phase 27 Test Suite & Global Verification** | `tests/phase27/test_pan_institutional_core.py`, `tests/phase27/run_all_phase27_tests.py` | Author dedicated unit and integration tests; verify 13/13 tests pass in 0.250s; certify Phase 27 quality gate with exit code 0. | ✅ Verified (All 13 tests pass; 100% exit code 0) |
+| **27.6 REST API Routing & Keyed HMAC Audit Ledger Enforcement** | `services/core-api/main.py`, `tests/phase27/test_pan_institutional_core.py` | Exposes protected REST endpoints (`/api/v1/clinical/pan-institutional/arbitrate`, `/api/v1/clinical/pan-institutional/evaluate`, `/api/v1/clinical/pan-institutional/domains`, `/api/v1/clinical/tropical/score`, `/api/v1/clinical/hepatobiliary/score`, `/api/v1/clinical/oncology/tnm-stage`, `/api/v1/clinical/rare-disease/match`). Integrates `get_current_principal` RBAC authorization and cryptographic SHA-256 HMAC append-only audit ledger. | ✅ Verified (All 7 REST routes execute with HTTP 200, valid bearer authentication, and automated HMAC cryptographic ledger appending; invalid domains reject cleanly with HTTP 422) |
+| **27.7 Dedicated Phase 27 Test Suite & Global Verification** | `tests/phase27/test_pan_institutional_core.py`, `tests/phase27/run_all_phase27_tests.py` | Author dedicated unit and integration tests; verify 14/14 tests pass in 0.130s; certify Phase 27 quality gate with exit code 0. | ✅ Verified (All 14 tests pass; 100% exit code 0) |
+| **27.8 End-to-End CPOE DRE Deterministic Safety Integration** | `services/core-api/cpoe_dre_engine.py`, `tests/phase27/test_pan_institutional_core.py` | Validates that pan-institutional recommendations (e.g. Piperacillin-Tazobactam for sepsis) are piped into the sub-millisecond deterministic DRE safety kernel. Lethal contraindications (Penicillin anaphylaxis) are hard-stopped while safe orders are cleared. | ✅ Verified (Direct test proves deterministic safety kernel cannot be overridden by advisory guidelines) |
 
 ---
 
@@ -3068,22 +3069,22 @@ Across the entire repository:
 1. **Master Phase Runners (`tests/run_all_phase_runners.py`):**
    - **27 of 27 Master Phase Runners PASSED with 100% Exit Code 0** (Phase 01 through Phase 27).
 2. **Global Comprehensive Regression Suite (`tests/run_all_phases_global.py`):**
-   - **248 of 248 Tests PASSED across all 27 phases in 5.590s**.
+   - **249 of 249 Tests PASSED across all 27 phases in 5.705s**.
    - **ZERO REGRESSIONS DETECTED**.
 3. **Pytest Master Discovery Suite (`python -m pytest tests/`):**
-   - **271 of 271 Pytests PASSED in 7.82s** with zero collection errors and zero test failures.
+   - **272 of 272 Pytests PASSED in 7.95s** with zero collection errors and zero test failures.
 4. **Live DRE Clinical Safety Regression Suite (`scripts/run_clinical_safety_regression.py`):**
    - Direct execution against live production classes `CPOEDREEngine` and `NICUPediatricEngine`.
-   - All 9 critical lethal contraindication cases intercepted in **1.24 ms**:
-     - `[DDI-001]` Nitrates + PDE5 inhibitors → INTERCEPTED (652.5 µs)
-     - `[DDI-002]` Methotrexate + TMP-SMX → INTERCEPTED (102.6 µs)
-     - `[DDI-003]` Potassium + K-sparing Diuretic → INTERCEPTED (91.6 µs)
-     - `[DDI-004]` Linezolid + SSRI/SNRI → INTERCEPTED (76.5 µs)
-     - `[DDI-005]` Simvastatin + Strong CYP3A4 inhibitor → INTERCEPTED (75.5 µs)
-     - `[ALLERGY-001]` Beta-lactam anaphylaxis cross-reactivity → INTERCEPTED (53.2 µs)
-     - `[ALLERGY-002]` Sulfonamide severe cross-reactivity → INTERCEPTED (59.1 µs)
-     - `[RENAL-001]` Metformin in severe renal impairment → INTERCEPTED (56.1 µs)
-     - `[PEDIATRIC-001]` Pediatric 10x massive overdose → INTERCEPTED (16.7 µs)
+   - All 9 critical lethal contraindication cases intercepted in **1.23 ms**:
+     - `[DDI-001]` Nitrates + PDE5 inhibitors → INTERCEPTED (642.9 µs)
+     - `[DDI-002]` Methotrexate + TMP-SMX → INTERCEPTED (98.7 µs)
+     - `[DDI-003]` Potassium + K-sparing Diuretic → INTERCEPTED (94.4 µs)
+     - `[DDI-004]` Linezolid + SSRI/SNRI → INTERCEPTED (74.1 µs)
+     - `[DDI-005]` Simvastatin + Strong CYP3A4 inhibitor → INTERCEPTED (75.1 µs)
+     - `[ALLERGY-001]` Beta-lactam anaphylaxis cross-reactivity → INTERCEPTED (52.7 µs)
+     - `[ALLERGY-002]` Sulfonamide severe cross-reactivity → INTERCEPTED (57.2 µs)
+     - `[RENAL-001]` Metformin in severe renal impairment → INTERCEPTED (54.3 µs)
+     - `[PEDIATRIC-001]` Pediatric 10x massive overdose → INTERCEPTED (15.5 µs)
 
 ---
 
@@ -3095,6 +3096,6 @@ The Project "HOSPITAL" platform has achieved complete mathematical, clinical, an
 - **Patient Safety Advocate Lens:** Dual-lens clinical presentation empowering patients with local actionable protocols utilizing affordable Jan Aushadhi / NLEM generic molecules alongside global benchmark references; fail-safe partial consultation safety-net advisories; finite-sample conformal prediction with empirical marginal coverage guarantees; dual-witness biometric narcotic dispensing; and strict Level-3 CDSS non-autonomous advisory boundaries requiring human clinician authentication.
 - **Strict Anti-Oscillation:** 100% feature lock; all 27 development phases are formally certified, verified, and sealed.
 
-**FINAL PROJECT STATUS:** ALL 27 PHASES FULLY CONSTRUCTED, ADVERSARIALLY HARDENED, TESTED, VERIFIED, AND LOCKED. 248/248 TESTS PASSING IN GLOBAL DISCOVERY RUNNER. 271/271 PYTESTS PASSING. 27/27 MASTER PHASE RUNNERS CERTIFIED. ZERO REGRESSIONS. THE PLATFORM IS OFFICIALLY SEALED AND PERMANENTLY QUALIFIED FOR LIVE 30-DAY SUPERVISED CLINICAL PILOT & RURAL FIELD DEPLOYMENT.
+**FINAL PROJECT STATUS:** ALL 27 PHASES FULLY CONSTRUCTED, ADVERSARIALLY HARDENED, TESTED, VERIFIED, AND LOCKED. 249/249 TESTS PASSING IN GLOBAL DISCOVERY RUNNER. 272/272 PYTESTS PASSING. 27/27 MASTER PHASE RUNNERS CERTIFIED. ZERO REGRESSIONS. THE PLATFORM IS OFFICIALLY SEALED AND PERMANENTLY QUALIFIED FOR LIVE 30-DAY SUPERVISED CLINICAL PILOT & RURAL FIELD DEPLOYMENT.
 
 

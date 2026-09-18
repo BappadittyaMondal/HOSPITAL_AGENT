@@ -202,6 +202,8 @@ if HAS_FASTAPI:
         domain: str
         patient_profile: Optional[Dict[str, Any]] = None
 
+    PanInstitutionalEvaluationRequest = PanInstitutionalArbitrateRequest
+
     class TropicalFeverRequest(BaseModel):
         patient_age: int
         days_of_fever: int
@@ -699,6 +701,7 @@ if HAS_FASTAPI:
         return res
 
     @app.post("/api/v1/clinical/pan-institutional/arbitrate", summary="Arbitrate Guidelines (AIIMS/CMC/SSKM vs Mayo/Hopkins)")
+    @app.post("/api/v1/clinical/pan-institutional/evaluate", summary="Evaluate Guidelines (AIIMS/CMC/SSKM vs Mayo/Hopkins)")
     async def arbitrate_pan_institutional_guidelines(
         req: PanInstitutionalArbitrateRequest,
         principal: Dict[str, Any] = Depends(get_current_principal)
