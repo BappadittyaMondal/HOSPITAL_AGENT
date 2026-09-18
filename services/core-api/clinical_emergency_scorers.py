@@ -140,7 +140,10 @@ def calculate_pediatric_emergency_doses(
             else:
                 weight_kg = (age_years + 4.0) * 2.0
         else:
-            weight_kg = 10.0  # Safe default 1-year infant assumption
+            raise ValueError(
+                "Mandatory pediatric clinical baseline required: both weight_kg and age_years are "
+                "missing or non-positive. Cannot fabricate safe dosing baseline."
+            )
 
     if age_years is None:
         age_years = max(0.5, (weight_kg / 2.0) - 4.0)
@@ -192,6 +195,9 @@ def calculate_anaphylaxis_protocol(
     First-line treatment is IMMEDIATE INTRAMUSCULAR ADRENALINE (Epinephrine) 1:1000 (1 mg/mL).
     Dose: 0.01 mg/kg IM, maximum 0.5 mg in adults (0.3 mg in children 6-12y, 0.15 mg in <6y).
     """
+    if weight_kg is None or weight_kg <= 0:
+        raise ValueError(f"Patient weight must be strictly positive (>0 kg), got: {weight_kg}")
+
     if is_child or weight_kg < 30.0:
         if weight_kg < 15.0:
             dose_mg = 0.15

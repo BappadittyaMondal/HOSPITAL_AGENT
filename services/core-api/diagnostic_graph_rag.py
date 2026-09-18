@@ -11,6 +11,7 @@ Execution Time: Sub-millisecond (< 1.0 ms), 100% deterministic, zero ungrounded 
 ====================================================================================================
 """
 
+import os
 import math
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Set, Tuple, Union, Any
@@ -54,9 +55,9 @@ class InvestigationResult:
         if not self.clinician_signed_off:
             return False, f"Test '{self.test_name}' lacks mandatory clinician sign-off."
         if self.numeric_value is None:
-            # Qualitative evaluation (such as 12-lead ECG interpreted by physician)
-            if any(k in self.test_name.upper() for k in ("ECG", "ELECTROCARDIOGRAM")):
-                return True, "Valid qualitative finding with sign-off"
+            # Qualitative/imaging evaluation interpreted by specialist
+            if any(k in self.test_name.upper() for k in ("ECG", "ELECTROCARDIOGRAM", "CT", "MRI", "LUMBAR", "CSF", "X-RAY", "ULTRASOUND")):
+                return True, "Valid qualitative/imaging finding with sign-off"
             return False, f"Test '{self.test_name}' lacks quantitative numeric value."
         return True, "Valid"
 
@@ -321,6 +322,29 @@ DISEASE_KNOWLEDGE_DAG = {
             "25064002": (0.85, 0.55),   # Headache
             "3006004": (0.75, 0.95),    # Neck stiffness
         }
+    },
+    "SUBARACHNOID_HEMORRHAGE": {
+        "snomed_id": "53741008",
+        "icd11_id": "8B00",
+        "name": "Subarachnoid Hemorrhage",
+        "base_prior_probability": 0.01,
+        "is_red_flag_emergency": True,
+        "features": {
+            "25064002": (0.95, 0.50),   # Severe Headache
+            "423341008": (0.80, 0.98),  # Thunderclap onset
+            "3006004": (0.70, 0.90),    # Neck stiffness / Meningism
+            "168537006": (0.98, 0.99),  # CT Brain / LP evidence of hemorrhage
+        }
+    },
+    "TENSION_HEADACHE": {
+        "snomed_id": "398057008",
+        "icd11_id": "8A81",
+        "name": "Tension-Type Headache",
+        "base_prior_probability": 0.25,
+        "is_red_flag_emergency": False,
+        "features": {
+            "25064002": (0.90, 0.50),   # Headache
+        }
     }
 }
 
@@ -407,6 +431,23 @@ MUST_NOT_MISS_SYNDROMES = {
                 "rationale": "Massive right heart strain risk."
             }
         ]
+    },
+    "ACUTE_SEVERE_HEADACHE": {
+        "trigger_snomed_ids": ["25064002", "423341008"],
+        "mandatory_rule_outs": [
+            {
+                "disease_key": "SUBARACHNOID_HEMORRHAGE",
+                "condition": "Subarachnoid Hemorrhage (Aneurysmal Rupture)",
+                "required_evaluations": ["168537006"],
+                "rationale": "Thunderclap onset reaches maximum intensity in seconds; catastrophic mortality if missed."
+            },
+            {
+                "disease_key": "BACTERIAL_MENINGITIS",
+                "condition": "Acute Bacterial Meningitis",
+                "required_evaluations": ["276575001"],
+                "rationale": "Severe headache with meningismus and fever requires CSF analysis to rule out bacterial meningitis."
+            }
+        ]
     }
 }
 
@@ -421,16 +462,32 @@ class CognitiveDeBiasingMatrix:
         self,
         present_snomed_ids: Set[str],
         completed_investigations: Union[Set[str], List[Any], Set[Any]],
-        proposed_diagnosis_key: str
+        proposed_diagnosis_key: str,
+        strict_validation: bool = False
     ) -> Dict:
         is_proposed_benign = not DISEASE_KNOWLEDGE_DAG.get(proposed_diagnosis_key, {}).get("is_red_flag_emergency", False)
+
+        is_strict = (
+            strict_validation
+            or os.getenv("STRICT_EVIDENCE_REQUIRED", "false").lower() in ("true", "1")
+            or os.getenv("HOSPITAL_ENV", "development").lower() in ("production", "prod")
+        )
 
         completed_ids = set()
         structured_lookup: Dict[str, Tuple[bool, str, Any]] = {}
 
         for item in completed_investigations:
             if isinstance(item, str):
-                completed_ids.add(item)
+                if is_strict:
+                    structured_lookup[item] = (
+                        False,
+                        f"Unverified raw string ID '{item}' rejected: Mandatory investigation must be a structured "
+                        f"InvestigationResult with status FINAL, quantitative numeric/imaging evidence, and clinician sign-off.",
+                        item
+                    )
+                else:
+                    completed_ids.add(item)
+                    structured_lookup[item] = (True, "Legacy string ID (Permitted in dev/test mode only)", item)
             elif isinstance(item, InvestigationResult):
                 valid, msg = item.is_valid_rule_out()
                 if valid:
@@ -441,8 +498,8 @@ class CognitiveDeBiasingMatrix:
                 st = str(item.get("status", "")).upper()
                 signed = bool(item.get("clinician_signed_off", False))
                 val = item.get("numeric_value")
-                is_ecg = any(k in str(item.get("test_name", "")).upper() for k in ("ECG", "ELECTROCARDIOGRAM"))
-                valid = (st == "FINAL") and signed and (val is not None or is_ecg)
+                is_imaging_or_ecg = any(k in str(item.get("test_name", "")).upper() for k in ("ECG", "ELECTROCARDIOGRAM", "CT", "MRI", "LUMBAR", "CSF"))
+                valid = (st == "FINAL") and signed and (val is not None or is_imaging_or_ecg)
                 msg = "Valid" if valid else f"Status: '{st}' (must be FINAL), signed: {signed}, numeric_value: {val}"
                 if valid:
                     completed_ids.add(inv_id)

@@ -53,8 +53,13 @@ def verify_csb_authorization_token(
     if not token_str or not isinstance(token_str, str):
         return False
     token = token_str.strip()
-    # Retain contract compatibility with existing legacy string
+    is_strict = (
+        os.getenv("STRICT_AUTH_REQUIRED", "false").lower() in ("true", "1")
+        or os.getenv("HOSPITAL_ENV", "development").lower() in ("production", "prod")
+    )
     if token == "CSB-AUTH-TOKEN-2026-BOARD-CERTIFIED":
+        if is_strict:
+            return False
         return True
 
     parts = token.split(".")
@@ -168,9 +173,9 @@ class ConformalPredictionEngine:
     via split-conformal calibration on empirical non-conformity scores.
     """
 
-    def __init__(self, significance_level_alpha: float = 0.01):
+    def __init__(self, significance_level_alpha: float = 0.01, alpha: Optional[float] = None):
         # Default 1 - alpha = 0.99 (99% coverage guarantee)
-        self.alpha = significance_level_alpha
+        self.alpha = alpha if alpha is not None else significance_level_alpha
         self.calibration_scores: List[float] = []
         self._calibrated_quantile: Optional[float] = None
 
@@ -193,13 +198,13 @@ class ConformalPredictionEngine:
         predicted_probabilities: Dict[str, float],
         experience_cases: int
     ) -> Dict:
-        """Constructs conformal prediction set Gamma(x) guaranteed to contain the true diagnosis."""
+        """Constructs split-conformal prediction set Gamma(x) guaranteed to achieve marginal coverage (1 - alpha)."""
         sorted_candidates = sorted(predicted_probabilities.items(), key=lambda x: x[1], reverse=True)
 
         if self._calibrated_quantile is not None:
-            coverage_target = min(max(self._calibrated_quantile, 0.5), 0.999)
+            threshold = min(max(self._calibrated_quantile, 0.5), 0.999)
         else:
-            coverage_target = 1.0 - self.alpha
+            threshold = 1.0 - self.alpha
 
         accumulated_mass = 0.0
         prediction_set = []
@@ -207,14 +212,17 @@ class ConformalPredictionEngine:
         for disease, prob in sorted_candidates:
             prediction_set.append(disease)
             accumulated_mass += prob
-            if accumulated_mass >= coverage_target:
+            if accumulated_mass >= threshold:
                 break
 
+        nominal_coverage = f"{(1.0 - self.alpha) * 100.0:.1f}%"
+
         return {
-            "coverage_guarantee": f"{coverage_target * 100:.1f}%",
+            "coverage_guarantee": nominal_coverage,
             "prediction_set": prediction_set,
             "prediction_set_size": len(prediction_set),
             "accumulated_probability_mass": round(accumulated_mass, 4),
+            "calibrated_threshold": round(threshold, 4),
             "epistemic_uncertainty": "LOW" if len(prediction_set) <= 2 else "MODERATE" if len(prediction_set) <= 3 else "HIGH"
         }
 

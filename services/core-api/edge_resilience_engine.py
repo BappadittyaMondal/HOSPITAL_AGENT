@@ -31,6 +31,11 @@ class DisasterRecoverySlaBreachError(EdgeResilienceError):
     pass
 
 
+class StaleFencingTokenError(EdgeResilienceError):
+    """Raised when an edge synchronization payload carries a stale or regressed monotonic fencing token."""
+    pass
+
+
 class ResourceClass(str, Enum):
     CLASS_A_PHYSICAL = "CLASS_A_PHYSICAL"  # ICU Beds, Operating Theatres, Blood Units (Exclusive)
     CLASS_B_VIRTUAL = "CLASS_B_VIRTUAL"    # OPD Queues, Lab Orders, Billing Vouchers
@@ -88,6 +93,7 @@ class EdgeResilienceEngine:
         self._global_resource_allocations: Dict[str, str] = {}  # resource_id -> allocated_patient_id
         self._leases: Dict[str, EdgeLease] = {}                 # resource_id -> EdgeLease
         self._global_audit_journal: List[LocalEdgeTransaction] = []
+        self._node_fencing_tokens: Dict[str, int] = {}          # node_id -> highest monotonic fencing token
 
         # WAL Shipping Simulator State
         self._last_wal_flush_time: datetime = datetime.now(timezone.utc)
@@ -179,6 +185,14 @@ class EdgeResilienceEngine:
                 f"Resource is not in this node's pessimistic lease partition (Assigned: {list(node.assigned_leases)})."
             )
 
+        # Lease Expiration & Safe Offline Unavailability Check
+        lease = self._leases.get(resource_id)
+        if lease and lease.expires_at < datetime.now(timezone.utc):
+            raise ResourceNotLeasedError(
+                f"[EDGE LEASING HARD GATE] Lease for resource {resource_id} expired at {lease.expires_at.isoformat()}. "
+                f"Safe offline unavailability enforced: cannot allocate expired lease partition."
+            )
+
         tx = LocalEdgeTransaction(
             tx_id=f"TX-BED-{resource_id}-{patient_id}",
             node_id=node_id,
@@ -267,6 +281,44 @@ class EdgeResilienceEngine:
             "duplicate_bed_conflicts": conflicts_detected,
             "zero_duplicate_assignments_certified": conflicts_detected == 0,
             "global_journal_size": len(self._global_audit_journal),
+        }
+
+    def sync_with_fencing_token(
+        self,
+        node_id: str,
+        fencing_token: int,
+        transactions: List[LocalEdgeTransaction]
+    ) -> Dict[str, Any]:
+        """
+        Synchronizes edge node transactions guarded by monotonic fencing token.
+        Rejects stale tokens to prevent split-brain write conflicts or replay attacks.
+        """
+        if node_id not in self._nodes:
+            raise EdgeResilienceError(f"Node {node_id} unrecognized.")
+
+        current_token = self._node_fencing_tokens.get(node_id, 0)
+        if fencing_token <= current_token:
+            raise StaleFencingTokenError(
+                f"[FENCING TOKEN REJECTED] Node {node_id} presented stale fencing token {fencing_token} "
+                f"<= current high watermark {current_token}."
+            )
+
+        self._node_fencing_tokens[node_id] = fencing_token
+
+        # Append valid transactions to local journal
+        node = self._nodes[node_id]
+        for tx in transactions:
+            node.local_journal.append(tx)
+
+        # If WAN is online, trigger reconciliation
+        if self.is_wan_online:
+            return self.reconcile_offline_journals()
+
+        return {
+            "status": "QUEUED_OFFLINE_LOCAL",
+            "node_id": node_id,
+            "fencing_token_accepted": fencing_token,
+            "pending_transactions": len(node.local_journal)
         }
 
     # =========================================================================

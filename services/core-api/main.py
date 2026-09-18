@@ -164,7 +164,7 @@ if HAS_FASTAPI:
         is_female: Optional[bool] = None
         current_medications: Optional[List[str]] = []
         known_allergies: Optional[List[str]] = []
-        is_pregnant: Optional[bool] = False
+        is_pregnant: Optional[bool] = None
 
     class HistoryIntakeRequest(BaseModel):
         session_id: str
@@ -196,7 +196,7 @@ if HAS_FASTAPI:
         arm_weakness: Optional[bool] = False
         speech_difficulty: Optional[bool] = False
         onset_hours_ago: Optional[float] = 1.0
-        patient_weight_kg: Optional[float] = 70.0
+        patient_weight_kg: Optional[float] = None
         patient_age_years: Optional[float] = None
         is_child: Optional[bool] = False
         tbsa_percentage: Optional[float] = 20.0
@@ -275,7 +275,39 @@ if HAS_FASTAPI:
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"status": "UNAUTHORIZED", "error": f"Invalid or expired authentication token: {err}"}
             )
+
+        # Anti-Tenant-Tampering Gate: Header tenant cannot override authenticated token tenant
+        token_tenant = payload.get("tenant_id")
+        user_role = payload.get("role", "")
+        if x_tenant_id and token_tenant and x_tenant_id != token_tenant:
+            if user_role not in ("SUPERADMIN", "SYSTEM_ADMIN"):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "status": "FORBIDDEN",
+                        "error": f"Cross-tenant access prohibited: Request tenant '{x_tenant_id}' does not match authenticated token tenant '{token_tenant}'."
+                    }
+                )
+
         return payload
+
+    def require_permission(required_permission: str):
+        """FastAPI route dependency enforcing granular role-based permissions."""
+        async def permission_checker(principal: Dict[str, Any] = Depends(get_current_principal)):
+            perms = principal.get("permissions", [])
+            role = principal.get("role", "")
+            if "*" in perms or role in ("SUPERADMIN", "SYSTEM_ADMIN"):
+                return principal
+            if required_permission not in perms:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "status": "FORBIDDEN",
+                        "error": f"Principal lacking mandatory permission '{required_permission}'. Role: '{role}'."
+                    }
+                )
+            return principal
+        return permission_checker
 
     @app.get("/health", summary="Service Health & Readiness Probe")
     async def get_health_status():
@@ -293,7 +325,39 @@ if HAS_FASTAPI:
 
     @app.get("/ready", summary="Readiness Check")
     async def get_readiness_status():
-        return {"ready": True, "database": "active", "timestamp": datetime.now(timezone.utc).isoformat()}
+        # Dynamic readiness verification across critical subsystems
+        is_dre_ready = dre_engine is not None
+        is_blood_bank_ready = blood_bank_engine is not None and len(blood_bank_engine._inventory) > 0
+        is_narcotics_ready = narcotics_vault is not None and len(narcotics_vault.balances) > 0
+        is_edge_ready = edge_engine is not None
+
+        all_ready = is_dre_ready and is_blood_bank_ready and is_narcotics_ready and is_edge_ready
+        if not all_ready:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "ready": False,
+                    "reason": "One or more core clinical subsystems are uninitialized or offline.",
+                    "subsystems": {
+                        "dre_engine": is_dre_ready,
+                        "blood_bank": is_blood_bank_ready,
+                        "narcotics_vault": is_narcotics_ready,
+                        "edge_resilience": is_edge_ready
+                    }
+                }
+            )
+
+        return {
+            "ready": True,
+            "database": "active",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "subsystems": {
+                "dre_engine": "HEALTHY",
+                "blood_bank": "HEALTHY",
+                "narcotics_vault": "HEALTHY",
+                "edge_resilience": "HEALTHY"
+            }
+        }
 
     @app.post("/api/v1/auth/token", summary="Authenticate Clinical Staff & Issue Contextual JWT")
     async def authenticate_staff(req: TokenRequest):
@@ -345,6 +409,27 @@ if HAS_FASTAPI:
                     "severity": "CRITICAL_FATAL"
                 })
 
+            # Teratogenic drug hold when pregnancy status is unspecified for female of childbearing age
+            teratogenic_keywords = ("methotrexate", "warfarin", "isotretinoin", "thalidomide", "valproate", "simvastatin", "atorvastatin")
+            if any(tk in drug_l for tk in teratogenic_keywords):
+                is_fem = req.is_female if req.is_female is not None else False
+                age = req.patient_age if req.patient_age is not None else 30
+                if is_fem and (12 <= age <= 55) and (req.is_pregnant is None):
+                    all_hard_stops.append({
+                        "rule_id": "DRE-INSUFFICIENT-DATA",
+                        "message": f"Teratogenic medication '{item.name}' requires explicit documented pregnancy status for female patient of childbearing age. Default assumption prohibited.",
+                        "severity": "CRITICAL_FATAL"
+                    })
+
+        # Document clinical data provenance honestly without fabricating measured facts
+        data_quality = {
+            "weight_provenance": "MEASURED" if req.patient_weight_kg is not None else "UNSPECIFIED_ADULT_BASELINE",
+            "creatinine_provenance": "MEASURED" if req.serum_creatinine is not None else "UNSPECIFIED_ADULT_BASELINE",
+            "age_provenance": "DOCUMENTED" if req.patient_age is not None else "UNSPECIFIED_ADULT_BASELINE",
+            "pregnancy_provenance": "DOCUMENTED" if req.is_pregnant is not None else "UNSPECIFIED",
+            "baseline_mode": "STANDARD_ADULT_UNADJUSTED" if (req.patient_weight_kg is None or req.serum_creatinine is None) else "INDIVIDUALIZED_MEASURED"
+        }
+
         if any(hs.get("rule_id") == "DRE-INSUFFICIENT-DATA" for hs in all_hard_stops):
             eval_us = round((time.perf_counter() - t0) * 1_000_000, 2)
             record_audit_event_safe(
@@ -362,10 +447,11 @@ if HAS_FASTAPI:
                 "status": "INSUFFICIENT_DATA_HOLD",
                 "hard_stops": all_hard_stops,
                 "warnings": all_warnings,
+                "data_quality": data_quality,
                 "evaluated_in_microseconds": eval_us
             }
 
-        # Safe defaults for non-renal adult routine orders where parameters were omitted
+        # Standard unadjusted baseline for routine non-renal adult medications where parameters were omitted
         eff_weight = req.patient_weight_kg if req.patient_weight_kg is not None else 70.0
         eff_bsa = req.patient_bsa_m2 if req.patient_bsa_m2 is not None else 1.73
         eff_cr = req.serum_creatinine if req.serum_creatinine is not None else 1.0
@@ -425,6 +511,7 @@ if HAS_FASTAPI:
             "status": status_str,
             "hard_stops": all_hard_stops,
             "warnings": all_warnings,
+            "data_quality": data_quality,
             "evaluated_in_microseconds": eval_us
         }
 
@@ -546,14 +633,26 @@ if HAS_FASTAPI:
             )
             return res.__dict__
         elif st == "PEDIATRIC":
-            res = calculate_pediatric_emergency_doses(
-                weight_kg=req.patient_weight_kg,
-                age_years=req.patient_age_years
-            )
-            return res.__dict__
+            if (req.patient_weight_kg is None or req.patient_weight_kg <= 0) and (req.patient_age_years is None or req.patient_age_years <= 0):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail={
+                        "status": "INSUFFICIENT_DATA",
+                        "error": "Pediatric emergency scoring requires verified patient_weight_kg or patient_age_years. Default fabrication prohibited."
+                    }
+                )
+            try:
+                res = calculate_pediatric_emergency_doses(
+                    weight_kg=req.patient_weight_kg,
+                    age_years=req.patient_age_years
+                )
+                return res.__dict__
+            except ValueError as ve:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"status": "INSUFFICIENT_DATA", "error": str(ve)})
         elif st == "ANAPHYLAXIS":
+            wt = req.patient_weight_kg if req.patient_weight_kg is not None and req.patient_weight_kg > 0 else (15.0 if req.is_child else 70.0)
             res = calculate_anaphylaxis_protocol(
-                weight_kg=req.patient_weight_kg or 70.0,
+                weight_kg=wt,
                 is_child=req.is_child or False
             )
             return res.__dict__
@@ -692,7 +791,7 @@ if HAS_FASTAPI:
     @app.post("/api/v1/billing/pmjay/adjudicate", summary="PM-JAY Bundled Package Anti-Breakage Adjudication")
     async def adjudicate_pmjay_charge(
         req: PMJAYAdjudicateRequest,
-        principal: Dict[str, Any] = Depends(get_current_principal)
+        principal: Dict[str, Any] = Depends(require_permission("BILLING_ADJUDICATE"))
     ):
         try:
             if req.encounter_id not in pmjay_engine.encounters:
