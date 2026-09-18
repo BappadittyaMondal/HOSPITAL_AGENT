@@ -13,7 +13,7 @@ def test_all_master_runners():
     passed_count = 0
     failed_count = 0
 
-    for i in range(1, 27):
+    for i in range(1, 28):
         phase_str = f"phase{i:02d}"
         runner_file = os.path.join(base_dir, phase_str, f"run_all_{phase_str}_tests.py")
         if not os.path.exists(runner_file):
@@ -34,7 +34,7 @@ def test_all_master_runners():
             failed_count += 1
 
     print("=" * 80)
-    print(f"MASTER RUNNER RESULTS: {passed_count} Passed / {failed_count} Failed out of 26 Phases")
+    print(f"MASTER RUNNER RESULTS: {passed_count} Passed / {failed_count} Failed out of 27 Phases")
     print("=" * 80)
     return 0 if failed_count == 0 else 1
 

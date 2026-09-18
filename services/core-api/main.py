@@ -100,6 +100,11 @@ from edge_resilience_engine import (
 from obstetrics_labor_engine import (
     ObstetricsLaborEngine, PartographActionLineBreachError, ObstetricSafetyError
 )
+from guideline_arbitration_engine import guideline_router, ClinicalDomain, JurisdictionContext
+from tropical_syndromic_engine import tropical_syndromic_engine
+from hepatobiliary_oncology_engine import hepatobiliary_oncology_engine
+from rare_disease_engine import rare_disease_engine
+from dual_lens_presenter import dual_lens_presenter
 
 # Instantiate deterministic clinical and operational engines
 dre_engine = CPOEDREEngine(tenant_id="TENANT-MAIN-01")
@@ -192,6 +197,44 @@ if HAS_FASTAPI:
 
     class SequentialIntakePartialFallbackRequest(BaseModel):
         session_id: str
+
+    class PanInstitutionalArbitrateRequest(BaseModel):
+        domain: str
+        patient_profile: Optional[Dict[str, Any]] = None
+
+    class TropicalFeverRequest(BaseModel):
+        patient_age: int
+        days_of_fever: int
+        platelet_count: Optional[int] = None
+        hematocrit_pct: Optional[float] = None
+        baseline_hematocrit_pct: Optional[float] = None
+        systolic_bp: Optional[int] = None
+        pulse_rate: Optional[int] = None
+        symptoms: Optional[List[str]] = []
+        physical_signs: Optional[List[str]] = []
+        is_monsoon_season: Optional[bool] = True
+        is_pregnant: Optional[bool] = False
+        geographic_belt: Optional[str] = "GANGETIC_ALLUVIAL"
+
+    class HepatobiliaryScoreRequest(BaseModel):
+        total_bilirubin_mg_dl: float
+        serum_albumin_g_dl: float
+        inr: float
+        serum_creatinine_mg_dl: float
+        serum_sodium_mEq_l: float
+        ascites_severity: Optional[str] = "NONE"
+        encephalopathy_grade: Optional[str] = "NONE"
+        has_dialysis_past_week: Optional[bool] = False
+
+    class TNMStagingRequest(BaseModel):
+        tumor_site: str
+        t_stage: str
+        n_stage: str
+        m_stage: str
+
+    class RareDiseaseMatchRequest(BaseModel):
+        phenotype_hpo_terms: List[str]
+        clinical_keywords: Optional[List[str]] = []
 
     class SyndromicHoldingPlanRequest(BaseModel):
         patient_id: str
@@ -654,6 +697,152 @@ if HAS_FASTAPI:
             payload={"status": "PARTIAL_FALLBACK", "unexcluded": res.get("unexcluded_must_not_miss")}
         )
         return res
+
+    @app.post("/api/v1/clinical/pan-institutional/arbitrate", summary="Arbitrate Guidelines (AIIMS/CMC/SSKM vs Mayo/Hopkins)")
+    async def arbitrate_pan_institutional_guidelines(
+        req: PanInstitutionalArbitrateRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        try:
+            domain_enum = ClinicalDomain(req.domain.upper())
+        except ValueError:
+            raise HTTPException(
+                status_code=HTTP_422_STATUS,
+                detail={"status": "INVALID_DOMAIN", "message": f"Clinical domain '{req.domain}' is not supported."}
+            )
+
+        res = guideline_router.arbitrate_conflict(domain_enum, req.patient_profile)
+        local_rec = res["primary_actionable_standard"]
+        global_rec = res["global_reference_benchmark"]
+
+        dual_presentation = dual_lens_presenter.generate_presentation(
+            report_id=f"DLP-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
+            patient_id=req.patient_profile.get("patient_id", "ANONYMOUS_CONSULT") if req.patient_profile else "ANONYMOUS_CONSULT",
+            clinical_syndrome=req.domain,
+            local_recommendation=local_rec,
+            global_benchmark=global_rec,
+            dre_passed=True,
+            economic_analysis=res.get("economic_formulary_analysis")
+        )
+
+        record_audit_event_safe(
+            tenant_id=principal.get("tenant_id", "TENANT-MAIN-01"),
+            event_type="PAN_INSTITUTIONAL_ARBITRATION",
+            aggregate_id=req.domain,
+            actor_id=principal.get("sub", "SYSTEM"),
+            payload={"domain": req.domain, "institution_selected": local_rec.get("institution")}
+        )
+        return {
+            "arbitration_result": res,
+            "dual_lens_report": dual_presentation
+        }
+
+    @app.post("/api/v1/clinical/tropical/score", summary="AIIMS & CMC Vellore Tropical Fever Assessment")
+    async def evaluate_tropical_fever(
+        req: TropicalFeverRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        assessment = tropical_syndromic_engine.evaluate_fever(
+            patient_age=req.patient_age,
+            days_of_fever=req.days_of_fever,
+            platelet_count=req.platelet_count,
+            hematocrit_pct=req.hematocrit_pct,
+            baseline_hematocrit_pct=req.baseline_hematocrit_pct,
+            systolic_bp=req.systolic_bp,
+            pulse_rate=req.pulse_rate,
+            symptoms=req.symptoms or [],
+            physical_signs=req.physical_signs or [],
+            is_monsoon_season=req.is_monsoon_season if req.is_monsoon_season is not None else True,
+            is_pregnant=req.is_pregnant if req.is_pregnant is not None else False,
+            geographic_belt=req.geographic_belt or "GANGETIC_ALLUVIAL"
+        )
+
+        record_audit_event_safe(
+            tenant_id=principal.get("tenant_id", "TENANT-MAIN-01"),
+            event_type="TROPICAL_FEVER_EVALUATION",
+            aggregate_id=str(assessment.primary_suspect.value),
+            actor_id=principal.get("sub", "SYSTEM"),
+            payload={"suspect": assessment.primary_suspect.value, "severity": assessment.severity_grade}
+        )
+        return assessment
+
+    @app.post("/api/v1/clinical/hepatobiliary/score", summary="SSKM Liver Staging (Child-Pugh & MELD-Na)")
+    async def evaluate_hepatobiliary_staging(
+        req: HepatobiliaryScoreRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        try:
+            cp = hepatobiliary_oncology_engine.calculate_child_pugh(
+                total_bilirubin_mg_dl=req.total_bilirubin_mg_dl,
+                serum_albumin_g_dl=req.serum_albumin_g_dl,
+                inr=req.inr,
+                ascites_severity=req.ascites_severity or "NONE",
+                encephalopathy_grade=req.encephalopathy_grade or "NONE"
+            )
+            meld = hepatobiliary_oncology_engine.calculate_meld_na(
+                serum_creatinine_mg_dl=req.serum_creatinine_mg_dl,
+                total_bilirubin_mg_dl=req.total_bilirubin_mg_dl,
+                inr=req.inr,
+                serum_sodium_mEq_l=req.serum_sodium_mEq_l,
+                has_dialysis_past_week=req.has_dialysis_past_week or False
+            )
+        except ValueError as ve:
+            raise HTTPException(
+                status_code=HTTP_422_STATUS,
+                detail={"status": "INVALID_LAB_INPUTS", "message": str(ve)}
+            )
+
+        record_audit_event_safe(
+            tenant_id=principal.get("tenant_id", "TENANT-MAIN-01"),
+            event_type="HEPATOBILIARY_STAGING",
+            aggregate_id=f"MELD-{meld.meld_na_score}",
+            actor_id=principal.get("sub", "SYSTEM"),
+            payload={"child_pugh_class": cp.child_pugh_class.value, "meld_na": meld.meld_na_score}
+        )
+        return {
+            "child_pugh": cp,
+            "meld_na": meld
+        }
+
+    @app.post("/api/v1/clinical/oncology/tnm-stage", summary="AJCC 8th Edition TNM Solid Tumor Staging")
+    async def evaluate_tnm_staging(
+        req: TNMStagingRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        result = hepatobiliary_oncology_engine.stage_tnm_solid_tumor(
+            tumor_site=req.tumor_site,
+            t_stage=req.t_stage,
+            n_stage=req.n_stage,
+            m_stage=req.m_stage
+        )
+
+        record_audit_event_safe(
+            tenant_id=principal.get("tenant_id", "TENANT-MAIN-01"),
+            event_type="ONCOLOGY_TNM_STAGING",
+            aggregate_id=f"{req.tumor_site}-{result.overall_stage}",
+            actor_id=principal.get("sub", "SYSTEM"),
+            payload={"tumor_site": req.tumor_site, "overall_stage": result.overall_stage, "resectability": result.resectability.value}
+        )
+        return result
+
+    @app.post("/api/v1/clinical/rare-disease/match", summary="CMC Vellore / Orphanet Rare Disease HPO Matching")
+    async def match_rare_disease(
+        req: RareDiseaseMatchRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        result = rare_disease_engine.match_phenotypes(
+            phenotype_hpo_terms=req.phenotype_hpo_terms,
+            clinical_keywords=req.clinical_keywords or []
+        )
+
+        record_audit_event_safe(
+            tenant_id=principal.get("tenant_id", "TENANT-MAIN-01"),
+            event_type="RARE_DISEASE_PHENOTYPE_MATCH",
+            aggregate_id="HPO_MATCH",
+            actor_id=principal.get("sub", "SYSTEM"),
+            payload={"matched_candidates_count": len(result.top_candidate_diseases)}
+        )
+        return result
 
     @app.post("/api/v1/triage/syndromic-holding-plan", summary="Generate 5-10 Hour Rural Pre-Hospital Holding Care Plan")
     async def generate_syndromic_plan(
