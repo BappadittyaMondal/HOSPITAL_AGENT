@@ -705,13 +705,23 @@ if HAS_FASTAPI:
     ):
         try:
             domain_enum = ClinicalDomain(req.domain.upper())
-        except ValueError:
+        except (ValueError, KeyError):
             raise HTTPException(
                 status_code=HTTP_422_STATUS,
-                detail={"status": "INVALID_DOMAIN", "message": f"Clinical domain '{req.domain}' is not supported."}
+                detail={
+                    "status": "INVALID_DOMAIN",
+                    "message": f"Clinical domain '{req.domain}' is not supported.",
+                    "supported_domains": guideline_router.list_supported_domains()
+                }
             )
 
-        res = guideline_router.arbitrate_conflict(domain_enum, req.patient_profile)
+        try:
+            res = guideline_router.arbitrate_conflict(domain_enum, req.patient_profile)
+        except KeyError as ke:
+            raise HTTPException(
+                status_code=HTTP_422_STATUS,
+                detail={"status": "UNCONFIGURED_DOMAIN", "message": str(ke), "supported_domains": guideline_router.list_supported_domains()}
+            )
         local_rec = res["primary_actionable_standard"]
         global_rec = res["global_reference_benchmark"]
 
@@ -735,6 +745,22 @@ if HAS_FASTAPI:
         return {
             "arbitration_result": res,
             "dual_lens_report": dual_presentation
+        }
+
+    @app.get("/api/v1/clinical/pan-institutional/domains", summary="List Supported Domains and Department Mapping")
+    async def list_pan_institutional_domains(
+        department: Optional[str] = None,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        if department:
+            mapped_domains = guideline_router.get_domains_for_department(department)
+            return {
+                "department": department,
+                "mapped_domains": [d.value for d in mapped_domains]
+            }
+        return {
+            "supported_domains": guideline_router.list_supported_domains(),
+            "department_domain_map": {k: [d.value for d in v] for k, v in guideline_router.DEPARTMENT_DOMAIN_MAP.items()}
         }
 
     @app.post("/api/v1/clinical/tropical/score", summary="AIIMS & CMC Vellore Tropical Fever Assessment")

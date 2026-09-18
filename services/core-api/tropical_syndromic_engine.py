@@ -79,7 +79,7 @@ class TropicalInfectionDeductionEngine:
         differentials = []
 
         # ------------------------------------------------------------------------------------------
-        # 1. DENGUE SEVERITY & CAPILLARY LEAK CHECK
+        # SYNDROMIC FEATURE EXTRACTION & CAPILLARY LEAK INDICATORS
         # ------------------------------------------------------------------------------------------
         has_abdominal_pain = any("abdominal" in s for s in sym_set)
         has_persistent_vomiting = any("vomit" in s for s in sym_set)

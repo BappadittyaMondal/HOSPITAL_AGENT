@@ -238,6 +238,78 @@ class TestPanInstitutionalCore(unittest.TestCase):
         self.assertEqual(rare_res.status_code, 200)
         self.assertTrue(len(rare_res.json()["top_candidate_diseases"]) > 0)
 
+        # 6. GET pan-institutional domains endpoint
+        domains_res = self.client.get(
+            "/api/v1/clinical/pan-institutional/domains",
+            headers=self.auth_headers
+        )
+        self.assertEqual(domains_res.status_code, 200)
+        self.assertIn("HYPERTENSION", domains_res.json()["supported_domains"])
+        self.assertIn("SEPSIS_RESUSCITATION", domains_res.json()["supported_domains"])
+        self.assertIn("CARDIOLOGY", domains_res.json()["department_domain_map"])
+
+        # 7. GET department filtered domains endpoint
+        dept_res = self.client.get(
+            "/api/v1/clinical/pan-institutional/domains?department=CARDIOLOGY",
+            headers=self.auth_headers
+        )
+        self.assertEqual(dept_res.status_code, 200)
+        self.assertIn("HYPERTENSION", dept_res.json()["mapped_domains"])
+
+        # 8. POST invalid domain returns clean HTTP 422 with supported_domains list
+        bad_domain_res = self.client.post(
+            "/api/v1/clinical/pan-institutional/arbitrate",
+            json={"domain": "NON_EXISTENT_DISEASE_DOMAIN"},
+            headers=self.auth_headers
+        )
+        self.assertEqual(bad_domain_res.status_code, 422)
+        self.assertEqual(bad_domain_res.json()["detail"]["status"], "INVALID_DOMAIN")
+        self.assertTrue(len(bad_domain_res.json()["detail"]["supported_domains"]) >= 8)
+
+    def test_sepsis_resuscitation_arbitration_aiims_vs_johns_hopkins(self):
+        """Verify Sepsis resuscitation arbitrates AIIMS crystalloid/norepi vs Hopkins multimodal VTI/vasopressin."""
+        res = guideline_router.arbitrate_conflict(ClinicalDomain.SEPSIS_RESUSCITATION)
+        local_std = res["primary_actionable_standard"]
+        self.assertEqual(local_std["institution"], InstitutionSource.AIIMS_NEW_DELHI.value)
+        self.assertIn("Norepinephrine", local_std["nlem_generic_molecules"])
+        self.assertIn("Piperacillin-Tazobactam", local_std["nlem_generic_molecules"])
+
+        global_bench = res["global_reference_benchmark"]
+        self.assertEqual(global_bench["institution"], InstitutionSource.JOHNS_HOPKINS_MEDICINE.value)
+        self.assertIn("Vasopressin", global_bench["nlem_generic_molecules"])
+
+    def test_diabetes_inpatient_arbitration_aiims_vs_mayo_clinic(self):
+        """Verify Inpatient Diabetes arbitrates AIIMS Human Insulin (low cost) vs Mayo Clinic analogs/CGM."""
+        res = guideline_router.arbitrate_conflict(ClinicalDomain.DIABETES_INPATIENT)
+        local_std = res["primary_actionable_standard"]
+        self.assertEqual(local_std["institution"], InstitutionSource.AIIMS_NEW_DELHI.value)
+        self.assertIn("Human Regular Insulin", local_std["nlem_generic_molecules"])
+        self.assertLess(local_std["estimated_daily_cost_inr"], 50.0)
+
+        global_bench = res["global_reference_benchmark"]
+        self.assertEqual(global_bench["institution"], InstitutionSource.MAYO_CLINIC.value)
+        self.assertIn("Insulin Glargine", global_bench["nlem_generic_molecules"])
+        self.assertGreater(global_bench["estimated_daily_cost_inr"], 300.0)
+
+    def test_nephrotic_syndrome_ckd_cmc_vellore_deworming(self):
+        """Verify CMC Vellore Nephrology protocol mandates prophylactic Albendazole deworming prior to steroids."""
+        res = guideline_router.arbitrate_conflict(ClinicalDomain.NEPHROTIC_SYNDROME_CKD)
+        local_std = res["primary_actionable_standard"]
+        self.assertEqual(local_std["institution"], InstitutionSource.CMC_VELLORE.value)
+        self.assertIn("Albendazole", local_std["nlem_generic_molecules"])
+
+    def test_department_to_domain_mapping_and_listing(self):
+        """Verify 40-department mapping router links specialties to their correct clinical domains."""
+        cardio_domains = guideline_router.get_domains_for_department("CARDIOLOGY")
+        self.assertIn(ClinicalDomain.HYPERTENSION, cardio_domains)
+        self.assertIn(ClinicalDomain.CORONARY_ARTERY_DISEASE_ACS, cardio_domains)
+
+        critical_domains = guideline_router.get_domains_for_department("CRITICAL_CARE")
+        self.assertIn(ClinicalDomain.SEPSIS_RESUSCITATION, critical_domains)
+
+        all_domains = guideline_router.list_supported_domains()
+        self.assertEqual(len(all_domains), 8)
+
 
 if __name__ == "__main__":
     unittest.main()
