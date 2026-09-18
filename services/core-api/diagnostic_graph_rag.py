@@ -348,6 +348,27 @@ DISEASE_KNOWLEDGE_DAG = {
     }
 }
 
+# Phase 33 S-01: Dynamically merge comprehensive disease registry
+try:
+    try:
+        from disease_knowledge_registry import DISEASE_REGISTRY
+    except ImportError:
+        from services.core_api.disease_knowledge_registry import DISEASE_REGISTRY
+
+    for d_key, entity in DISEASE_REGISTRY.items():
+        DISEASE_KNOWLEDGE_DAG[d_key] = {
+            "snomed_id": entity.snomed_id,
+            "icd11_id": entity.icd11_id,
+            "name": entity.name,
+            "base_prior_probability": entity.base_prior_probability,
+            "is_red_flag_emergency": entity.is_red_flag_emergency,
+            "features": entity.features,
+            "mandatory_rule_outs": entity.mandatory_rule_outs,
+            "recommended_investigations": entity.recommended_investigations
+        }
+except Exception:
+    pass
+
 
 class PertinentNegativesEngine:
     """Calculates Bayesian Likelihood Ratios incorporating both present findings and pertinent negatives."""

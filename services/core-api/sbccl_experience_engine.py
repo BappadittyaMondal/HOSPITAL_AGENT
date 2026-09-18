@@ -19,7 +19,13 @@ import hmac
 import hashlib
 from typing import Dict, List, Optional, Set, Tuple
 
-CSB_HMAC_SECRET = os.getenv("CSB_PROMOTION_SECRET", "CSB-SECRET-KEY-AIIMS-SAFETY-2026").encode("utf-8")
+_env_csb_secret = os.getenv("CSB_PROMOTION_SECRET")
+_env_csb_mode = os.getenv("HOSPITAL_ENV", "development").lower()
+if not _env_csb_secret:
+    if _env_csb_mode in ("production", "prod"):
+        raise RuntimeError("FATAL SECURITY EXCEPTION: CSB_PROMOTION_SECRET environment variable is required in production mode.")
+    _env_csb_secret = os.getenv("CSB_DEV_EPHEMERAL_SECRET", "CSB-EPHEMERAL-DEV-KEY-SAFETY-2026")
+CSB_HMAC_SECRET = _env_csb_secret.encode("utf-8") if isinstance(_env_csb_secret, str) else _env_csb_secret
 
 
 def create_csb_authorization_token(

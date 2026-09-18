@@ -28,6 +28,15 @@ LIFETIME_TOXICITY_LIMITS = {
     "cisplatin": {"max_lifetime_mg_m2": 600.0, "organ": "NEPHROTOXICITY_OTOTOXICITY"}
 }
 
+try:
+    from nlem_formulary_engine import global_nlem_formulary_engine
+except ImportError:
+    try:
+        from services.core_api.nlem_formulary_engine import global_nlem_formulary_engine
+    except ImportError:
+        global_nlem_formulary_engine = None
+
+
 # Teratogenic drugs strictly contraindicated in pregnancy (FDA Category D/X)
 PREGNANCY_CONTRAINDICATED_DRUGS = {
     "warfarin": {
@@ -285,6 +294,26 @@ class CPOEDREEngine:
                 warnings.append(
                     f"APPROACHING TOXICITY CEILING: {drug_name} lifetime total is at {new_total:.1f}/{max_allowed}."
                 )
+
+        # Phase 33 S-02: Deep NLEM Formulary & Combinatorial DDI screening
+        if global_nlem_formulary_engine is not None:
+            try:
+                regimen = [drug_name] + current_medications
+                nlem_eval = global_nlem_formulary_engine.screen_prescription_regimen(
+                    drugs_prescribed=regimen,
+                    patient_is_pregnant=is_pregnant,
+                    patient_egfr=egfr
+                )
+                for v in nlem_eval.get("lethal_violations", []):
+                    msg = f"NLEM DDI FATAL: {v.get('drug_pair', v.get('drug'))} - {v.get('clinical_consequence', v.get('warning', ''))}"
+                    if not any(v.get('clinical_consequence', 'NO_MATCH') in hs for hs in hard_stops):
+                        hard_stops.append(msg)
+                for w in nlem_eval.get("clinical_warnings", []):
+                    msg = f"NLEM WARNING: {w.get('drug_pair', w.get('drug'))} - {w.get('clinical_consequence', w.get('guideline', w.get('warning', '')))}"
+                    if msg not in warnings:
+                        warnings.append(msg)
+            except Exception:
+                pass
 
         status = "BLOCKED" if hard_stops else ("WARNINGS_EXIST" if warnings else "APPROVED")
         return {

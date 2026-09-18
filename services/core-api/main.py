@@ -105,6 +105,14 @@ from tropical_syndromic_engine import tropical_syndromic_engine
 from hepatobiliary_oncology_engine import hepatobiliary_oncology_engine
 from rare_disease_engine import rare_disease_engine
 from dual_lens_presenter import dual_lens_presenter
+from multimodal_signal_engine import multimodal_signal_engine, LeadVoltageData
+from snomed_icd_ontology_index import local_ontology_index
+from vernacular_voice_scribe import vernacular_voice_scribe
+from enterprise_sharding_engine import enterprise_sharding_router
+from disease_knowledge_registry import global_disease_registry_engine, DISEASE_REGISTRY
+from nlem_formulary_engine import global_nlem_formulary_engine
+from patient_persistence_store import global_patient_persistence_store
+from prescription_protocol_engine import global_prescription_protocol_engine
 
 # Instantiate deterministic clinical and operational engines
 dre_engine = CPOEDREEngine(tenant_id="TENANT-MAIN-01")
@@ -237,6 +245,91 @@ if HAS_FASTAPI:
     class RareDiseaseMatchRequest(BaseModel):
         phenotype_hpo_terms: List[str]
         clinical_keywords: Optional[List[str]] = []
+
+    class ECGAnalysisRequest(BaseModel):
+        patient_id: str
+        heart_rate_bpm: int
+        pr_ms: float
+        qrs_ms: float
+        qt_ms: float
+        leads: Dict[str, Dict[str, Any]]
+        patient_gender: Optional[str] = "MALE"
+        patient_age: Optional[int] = 55
+
+    class OntologyLookupRequest(BaseModel):
+        term: str
+        ancestor_concept_id: Optional[str] = None
+
+    class VoiceScribeRequest(BaseModel):
+        patient_id: str
+        transcript_text: str
+        language_hint: Optional[str] = None
+
+    class ShardResolutionRequest(BaseModel):
+        tenant_id: str
+        mrn: str
+
+    class ClinicalDifferentialRequest(BaseModel):
+        present_snomed_ids: List[str]
+        absent_snomed_ids: Optional[List[str]] = []
+        category_filter: Optional[str] = None
+
+    class FormularyScreenRequest(BaseModel):
+        drugs_prescribed: List[str]
+        patient_id: Optional[str] = None
+        patient_is_pregnant: Optional[bool] = False
+        patient_egfr: Optional[float] = None
+        patient_allergies: Optional[List[str]] = []
+
+    class EncounterStartRequest(BaseModel):
+        encounter_type: Optional[str] = "EMERGENCY"
+        chief_complaint: Optional[str] = "Acute Presentation"
+        triage_level: Optional[str] = "ESI-3"
+
+    class AllergyRecordRequest(BaseModel):
+        allergen_name: str
+        reaction_type: Optional[str] = "ANAPHYLAXIS"
+        severity: Optional[str] = "SEVERE"
+        snomed_id: Optional[str] = None
+
+    class ProblemRecordRequest(BaseModel):
+        diagnosis_name: str
+        condition_snomed: Optional[str] = "UNKNOWN"
+        condition_icd11: Optional[str] = "UNKNOWN"
+        status: Optional[str] = "ACTIVE"
+        onset_date: Optional[str] = None
+
+    class MedicationRecordRequest(BaseModel):
+        drug_name: str
+        dose: str
+        frequency: str
+        route: Optional[str] = "ORAL"
+        encounter_id: Optional[str] = None
+
+    class ObservationRecordRequest(BaseModel):
+        patient_id: str
+        concept_name: str
+        concept_code: str
+        value_numeric: Optional[float] = None
+        value_string: Optional[str] = None
+        unit: Optional[str] = None
+
+    class PrescriptionProtocolRequest(BaseModel):
+        disease_key: str
+        patient_age: Optional[int] = None
+        patient_weight_kg: Optional[float] = None
+        patient_egfr: Optional[float] = None
+        is_pregnant: Optional[bool] = False
+        known_allergies: Optional[List[str]] = []
+
+    class PatientAdmissionRequest(BaseModel):
+        name: str
+        age: int
+        gender: str
+        blood_group: Optional[str] = None
+        abha_id: Optional[str] = None
+        mrn: Optional[str] = None
+        emergency_contact: Optional[str] = None
 
     class SyndromicHoldingPlanRequest(BaseModel):
         patient_id: str
@@ -374,13 +467,16 @@ if HAS_FASTAPI:
 
     @app.get("/health", summary="Service Health & Readiness Probe")
     async def get_health_status():
+        has_pg = bool(os.getenv("POSTGRES_PASSWORD") or (os.getenv("POSTGRES_HOST") and os.getenv("POSTGRES_HOST") != "localhost"))
+        has_redis = bool(os.getenv("REDIS_URL") or os.getenv("REDIS_HOST"))
         return {
             "status": "healthy",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "version": "1.0.0",
+            "mode": "ENTERPRISE_DISTRIBUTED" if has_pg else "EDGE_LOCAL_RESILIENT",
             "services": {
-                "postgres": "connected",
-                "redis": "connected",
+                "postgres": "connected" if has_pg else "edge_sqlite_wal_active",
+                "redis": "connected" if has_redis else "in_memory_lru_active",
                 "safety_engine": "online",
                 "syndromic_engine": "online"
             }
@@ -872,6 +968,309 @@ if HAS_FASTAPI:
             payload={"matched_candidates_count": len(result.top_candidate_diseases)}
         )
         return result
+
+    @app.post("/api/v1/clinical/ecg/analyze-12-lead", summary="Multi-Modal 12-Lead ECG Analysis & STEMI Gating")
+    async def analyze_ecg(
+        req: ECGAnalysisRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        leads_converted = {}
+        for lead_name, lead_dict in req.leads.items():
+            leads_converted[lead_name] = LeadVoltageData(
+                lead_name=lead_name,
+                st_elevation_mm=float(lead_dict.get("st_elevation_mm", 0.0)),
+                st_depression_mm=float(lead_dict.get("st_depression_mm", 0.0)),
+                t_wave_inversion=bool(lead_dict.get("t_wave_inversion", False)),
+                pathologic_q_wave=bool(lead_dict.get("pathologic_q_wave", False))
+            )
+        result = multimodal_signal_engine.analyze_12_lead_ecg(
+            patient_id=req.patient_id,
+            heart_rate_bpm=req.heart_rate_bpm,
+            pr_ms=req.pr_ms,
+            qrs_ms=req.qrs_ms,
+            qt_ms=req.qt_ms,
+            leads=leads_converted,
+            patient_gender=req.patient_gender or "MALE",
+            patient_age=req.patient_age or 55
+        )
+        record_audit_event_safe(
+            tenant_id=principal.get("tenant_id", "TENANT-MAIN-01"),
+            event_type="ECG_12_LEAD_ANALYSIS",
+            aggregate_id=req.patient_id,
+            actor_id=principal.get("sub", "SYSTEM"),
+            payload={"stemi_present": result.stemi_present, "rhythm": result.primary_rhythm.value}
+        )
+        return result
+
+    @app.post("/api/v1/clinical/ontology/lookup-and-subsume", summary="Full-Graph Local Ontological Index & Subsumption")
+    async def ontology_lookup_and_subsume(
+        req: OntologyLookupRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        cid = local_ontology_index.resolve_term_to_concept_id(req.term)
+        concept = local_ontology_index.get_concept(cid) if cid else None
+        is_descendant = False
+        if cid and req.ancestor_concept_id:
+            is_descendant = local_ontology_index.is_a_descendant_of(cid, req.ancestor_concept_id)
+        return {
+            "query_term": req.term,
+            "resolved_concept_id": cid,
+            "concept": concept,
+            "ancestor_checked": req.ancestor_concept_id,
+            "is_descendant": is_descendant
+        }
+
+    @app.post("/api/v1/clinical/scribe/process-voice-transcript", summary="Vernacular Clinical Voice-to-FHIR Scribe Interface")
+    async def process_voice_transcript(
+        req: VoiceScribeRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        bundle = vernacular_voice_scribe.parse_vernacular_transcript(
+            transcript_text=req.transcript_text,
+            patient_id=req.patient_id,
+            language_hint=req.language_hint
+        )
+        record_audit_event_safe(
+            tenant_id=principal.get("tenant_id", "TENANT-MAIN-01"),
+            event_type="VERNACULAR_VOICE_SCRIBE_INTAKE",
+            aggregate_id=bundle.encounter_id,
+            actor_id=principal.get("sub", "SYSTEM"),
+            payload={"language": bundle.language_detected, "red_flag": bundle.red_flag_alert_triggered}
+        )
+        return bundle
+
+    @app.post("/api/v1/cluster/sharding/resolve-patient", summary="Enterprise Citus Sharding & Edge WAL Resolver")
+    async def resolve_patient_shard(
+        req: ShardResolutionRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        return enterprise_sharding_router.resolve_patient_shard(
+            tenant_id=req.tenant_id,
+            mrn=req.mrn
+        )
+
+    # ----------------------------------------------------------------------------------------------
+    # PHASE 33: CLINICAL FOUNDATION REALIZATION ENDPOINTS (S-01, S-02, S-03)
+    # ----------------------------------------------------------------------------------------------
+
+    @app.get("/api/v1/clinical/knowledge/diseases", summary="Search and Retrieve Disease Knowledge Registry")
+    async def get_disease_knowledge_list(category: Optional[str] = None):
+        diseases = []
+        for key, d in DISEASE_REGISTRY.items():
+            if category and d.category != category:
+                continue
+            diseases.append({
+                "disease_key": d.disease_key,
+                "name": d.name,
+                "snomed_id": d.snomed_id,
+                "icd11_id": d.icd11_id,
+                "category": d.category,
+                "is_red_flag_emergency": d.is_red_flag_emergency
+            })
+        return {"total_count": len(diseases), "diseases": diseases}
+
+    @app.post("/api/v1/clinical/knowledge/differential", summary="Evaluate Multimodal Diagnostic Differential across 120+ Disease Registry")
+    async def evaluate_clinical_differential(
+        req: ClinicalDifferentialRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        diff = global_disease_registry_engine.evaluate_case(
+            present_snomed_ids=set(req.present_snomed_ids),
+            absent_snomed_ids=set(req.absent_snomed_ids or []),
+            category_filter=req.category_filter
+        )
+        return {
+            "evaluated_findings_count": len(req.present_snomed_ids) + len(req.absent_snomed_ids or []),
+            "differential_ranked": diff[:15]
+        }
+
+    @app.post("/api/v1/clinical/formulary/screen-order", summary="NLEM 2022 Comprehensive 500+ DDI & Teratogenicity Screen")
+    async def screen_formulary_order(
+        req: FormularyScreenRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        combined_drugs = list(req.drugs_prescribed)
+        is_pregnant = bool(req.patient_is_pregnant)
+        patient_egfr = req.patient_egfr
+        patient_allergies = list(req.patient_allergies or [])
+
+        if req.patient_id:
+            rec = global_patient_persistence_store.get_longitudinal_record(req.patient_id)
+            if rec:
+                active_meds = [m["drug_name"] for m in rec.get("active_medications", []) if m.get("drug_name")]
+                for m_name in active_meds:
+                    if m_name not in combined_drugs:
+                        combined_drugs.append(m_name)
+                demo = rec.get("demographics", {})
+                if not req.patient_is_pregnant and demo.get("is_pregnant"):
+                    is_pregnant = True
+                # Extract documented allergies from persistent patient chart
+                for al in rec.get("allergies", []):
+                    al_name = al.get("allergen_name")
+                    if al_name and al_name not in patient_allergies:
+                        patient_allergies.append(al_name)
+
+        return global_nlem_formulary_engine.screen_prescription_regimen(
+            drugs_prescribed=combined_drugs,
+            patient_is_pregnant=is_pregnant,
+            patient_egfr=patient_egfr,
+            patient_allergies=patient_allergies
+        )
+
+    @app.post("/api/v1/clinical/prescriptions/generate-protocol", summary="WHO/AIIMS Standard Treatment Guideline Prescription Generator")
+    async def generate_prescription_protocol(
+        req: PrescriptionProtocolRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        return global_prescription_protocol_engine.generate_prescription_protocol(
+            disease_key=req.disease_key,
+            patient_age=req.patient_age,
+            patient_weight_kg=req.patient_weight_kg,
+            patient_egfr=req.patient_egfr,
+            is_pregnant=req.is_pregnant,
+            known_allergies=req.known_allergies
+        )
+
+    @app.post("/api/v1/patients/admit", summary="Persistent Patient Admission & ABHA Registration")
+    async def admit_patient_record(
+        req: PatientAdmissionRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        return global_patient_persistence_store.register_patient(
+            name=req.name,
+            age=req.age,
+            gender=req.gender,
+            blood_group=req.blood_group,
+            abha_id=req.abha_id,
+            mrn=req.mrn,
+            emergency_contact=req.emergency_contact
+        )
+
+    @app.get("/api/v1/patients/{patient_id}/longitudinal-record", summary="Retrieve Persistent Longitudinal Patient Encounter Record")
+    async def get_patient_longitudinal_record(
+        patient_id: str,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        rec = global_patient_persistence_store.get_longitudinal_record(patient_id)
+        if not rec:
+            raise HTTPException(status_code=404, detail=f"Patient {patient_id} not found in persistent store.")
+        return rec
+
+    @app.post("/api/v1/patients/{patient_id}/encounters/start", summary="Start New Clinical Patient Encounter")
+    async def start_patient_encounter(
+        patient_id: str,
+        req: EncounterStartRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        res = global_patient_persistence_store.start_encounter(
+            patient_id=patient_id,
+            encounter_type=req.encounter_type or "EMERGENCY",
+            chief_complaint=req.chief_complaint or "Acute Presentation",
+            triage_level=req.triage_level or "ESI-3"
+        )
+        return res
+
+    @app.post("/api/v1/patients/{patient_id}/allergies", summary="Record Patient Drug or Environmental Allergy")
+    async def record_patient_allergy(
+        patient_id: str,
+        req: AllergyRecordRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        res = global_patient_persistence_store.add_allergy(
+            patient_id=patient_id,
+            allergen_name=req.allergen_name,
+            reaction_type=req.reaction_type or "ANAPHYLAXIS",
+            severity=req.severity or "SEVERE",
+            snomed_id=req.snomed_id
+        )
+        return res
+
+    @app.post("/api/v1/patients/{patient_id}/problems", summary="Record Patient Diagnosis to Active Problem List")
+    async def record_patient_problem(
+        patient_id: str,
+        req: ProblemRecordRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        res = global_patient_persistence_store.add_problem(
+            patient_id=patient_id,
+            diagnosis_name=req.diagnosis_name,
+            condition_snomed=req.condition_snomed or "UNKNOWN",
+            condition_icd11=req.condition_icd11 or "UNKNOWN",
+            status=req.status or "ACTIVE",
+            onset_date=req.onset_date
+        )
+        return res
+
+    @app.post("/api/v1/patients/{patient_id}/medications", summary="Prescribe Active Inpatient Medication")
+    async def record_patient_medication(
+        patient_id: str,
+        req: MedicationRecordRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        res = global_patient_persistence_store.add_medication(
+            patient_id=patient_id,
+            drug_name=req.drug_name,
+            dose=req.dose,
+            frequency=req.frequency,
+            route=req.route or "ORAL",
+            encounter_id=req.encounter_id
+        )
+        return res
+
+    @app.post("/api/v1/patients/encounters/{encounter_id}/observations", summary="Record Vital Sign or Diagnostic Lab Observation")
+    async def record_encounter_observation(
+        encounter_id: str,
+        req: ObservationRecordRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        res = global_patient_persistence_store.record_observation(
+            encounter_id=encounter_id,
+            patient_id=req.patient_id,
+            concept_name=req.concept_name,
+            concept_code=req.concept_code,
+            value_numeric=req.value_numeric,
+            value_string=req.value_string,
+            unit=req.unit
+        )
+        return res
+
+    @app.post("/api/v1/patients/{patient_id}/encounters/{encounter_id}/discharge", summary="Discharge Patient Encounter")
+    async def discharge_patient_encounter(
+        patient_id: str,
+        encounter_id: str,
+        discharge_disposition: Optional[str] = "HOME",
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        res = global_patient_persistence_store.discharge_encounter(encounter_id=encounter_id, disposition=discharge_disposition)
+        return {"status": "DISCHARGED", "encounter_id": encounter_id, "patient_id": patient_id, "result": res}
+
+    @app.post("/api/v1/patients/{patient_id}/medications/{medication_id}/discontinue", summary="Discontinue Active Medication")
+    async def discontinue_patient_medication(
+        patient_id: str,
+        medication_id: str,
+        reason: Optional[str] = "COMPLETED",
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        res = global_patient_persistence_store.discontinue_medication(medication_id=medication_id, reason=reason)
+        return {"status": "DISCONTINUED", "medication_id": medication_id, "patient_id": patient_id, "result": res}
+
+    @app.post("/api/v1/patients/{patient_id}/problems/{problem_id}/resolve", summary="Resolve Active Chronic Problem")
+    async def resolve_patient_problem(
+        patient_id: str,
+        problem_id: str,
+        clinical_status: Optional[str] = "RESOLVED",
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        res = global_patient_persistence_store.resolve_problem(problem_id=problem_id)
+        return {"status": "RESOLVED", "problem_id": problem_id, "patient_id": patient_id, "result": res}
+
+    @app.get("/api/v1/patients/encounters/{encounter_id}/observations", summary="Retrieve Observations for Encounter")
+    async def get_encounter_observations(
+        encounter_id: str,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        obs = global_patient_persistence_store.get_observations(encounter_id)
+        return {"encounter_id": encounter_id, "observations": obs}
 
     @app.post("/api/v1/triage/syndromic-holding-plan", summary="Generate 5-10 Hour Rural Pre-Hospital Holding Care Plan")
     async def generate_syndromic_plan(

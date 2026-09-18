@@ -159,7 +159,7 @@ class StructuredHistoryEngine:
 
         session.findings.append(StructuredFinding(
             concept_name="Diaphoresis",
-            snomed_id="247441003",
+            snomed_id="398602008",
             polarity=FindingPolarity.PRESENT if diaphoresis else FindingPolarity.ABSENT,
             is_red_flag=diaphoresis
         ))
