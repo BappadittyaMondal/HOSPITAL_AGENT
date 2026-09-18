@@ -1,6 +1,6 @@
 """
 Global Multi-Phase Regression Runner
-Discovers and executes all test suites across all phases (Phase 01 to Phase 20).
+Discovers and executes all test suites across all phases (Phase 01 to Phase 27).
 """
 
 import os
