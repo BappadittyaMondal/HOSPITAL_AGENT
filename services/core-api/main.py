@@ -10,7 +10,7 @@ import os
 import sys
 import re
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger("hospital.core_api")
@@ -120,22 +120,23 @@ history_engine = StructuredHistoryEngine()
 protocol_engine = SyndromicProtocolEngine(tenant_id="TENANT-MAIN-01")
 
 # Operational Hospital Engines
-blood_bank_engine = BloodBankEngine(tenant_id="TENANT-MAIN-01")
+blood_bank_engine = BloodBankEngine(tenant_id="TENANT-MAIN-01", persistence_store=global_patient_persistence_store)
 blood_bank_engine.register_blood_unit("UNIT-O-NEG-001", "O_NEG", "PACKED_RED_BLOOD_CELLS")
 blood_bank_engine.register_blood_unit("UNIT-A-POS-001", "A_POS", "PACKED_RED_BLOOD_CELLS")
 blood_bank_engine.register_blood_unit("UNIT-B-POS-001", "B_POS", "PACKED_RED_BLOOD_CELLS")
 blood_bank_engine.register_blood_unit("UNIT-AB-POS-001", "AB_POS", "PACKED_RED_BLOOD_CELLS")
 
-narcotics_vault = NDPSNarcoticsVaultEngine()
-admin_cred = BiometricCredential("PHARM-01", "PHARMACIST", "BIO-ADMIN-TOKEN-01", True, datetime.now(timezone.utc))
-witness_cred = BiometricCredential("NURSE-01", "NURSE_INCHARGE", "BIO-WITNESS-TOKEN-01", True, datetime.now(timezone.utc))
-narcotics_vault.initialize_drug_vault("MORPHINE_10MG", 100, admin_cred, witness_cred)
-narcotics_vault.initialize_drug_vault("FENTANYL_100MCG", 50, admin_cred, witness_cred)
+narcotics_vault = NDPSNarcoticsVaultEngine(persistence_store=global_patient_persistence_store)
+if "MORPHINE_10MG" not in narcotics_vault.balances:
+    admin_cred = BiometricCredential("PHARM-01", "PHARMACIST", "BIO-ADMIN-TOKEN-01", True, datetime.now(timezone.utc))
+    witness_cred = BiometricCredential("NURSE-01", "NURSE_INCHARGE", "BIO-WITNESS-TOKEN-01", True, datetime.now(timezone.utc))
+    narcotics_vault.initialize_drug_vault("MORPHINE_10MG", 100, admin_cred, witness_cred)
+    narcotics_vault.initialize_drug_vault("FENTANYL_100MCG", 50, admin_cred, witness_cred)
 
 pmjay_engine = PMJAYNHCXEngine()
 
 billing_engine = DynamicBillingEngine()
-edge_engine = EdgeResilienceEngine()
+edge_engine = EdgeResilienceEngine(persistence_store=global_patient_persistence_store)
 obstetrics_engine = ObstetricsLaborEngine()
 
 if HAS_FASTAPI:
@@ -324,11 +325,13 @@ if HAS_FASTAPI:
 
     class PrescriptionSignRequest(BaseModel):
         prescription_id: str
-        physician_name: str
-        rmp_registration_number: str
+        physician_name: Optional[str] = "EMERGENCY_PRESCRIBER"
+        rmp_registration_number: Optional[str] = None
         council_affiliation: Optional[str] = "NATIONAL_MEDICAL_COMMISSION"
         clinical_notes: Optional[str] = None
         override_flags: Optional[List[str]] = []
+        is_emergency_override: Optional[bool] = False
+        emergency_override_reason: Optional[str] = None
 
     class PatientAdmissionRequest(BaseModel):
         name: str
@@ -1144,6 +1147,50 @@ if HAS_FASTAPI:
         req: PrescriptionSignRequest,
         principal: Dict[str, Any] = Depends(get_current_principal)
     ):
+        now_utc = datetime.now(timezone.utc)
+        if req.is_emergency_override:
+            if not req.emergency_override_reason or not req.emergency_override_reason.strip():
+                raise HTTPException(
+                    status_code=HTTP_422_STATUS,
+                    detail={
+                        "status": "MISSING_EMERGENCY_REASON",
+                        "error": "NABH Emergency Break-Glass requires a mandatory clinical justification (e.g., CODE RED RESUSCITATION)."
+                    }
+                )
+            reconciliation_deadline = (now_utc + timedelta(hours=24)).isoformat()
+            actor = principal.get("sub", req.physician_name or "EMERGENCY_CLINICIAN")
+
+            record_audit_event_safe(
+                tenant_id=principal.get("tenant_id", "TENANT-MAIN-01"),
+                event_type="NABH_EMERGENCY_BREAK_GLASS_INVOKED",
+                aggregate_id=req.prescription_id,
+                actor_id=f"EMERGENCY:{actor}",
+                payload={
+                    "physician_name": req.physician_name,
+                    "override_reason": req.emergency_override_reason,
+                    "reconciliation_deadline_utc": reconciliation_deadline,
+                    "status": "EMERGENCY_BREAK_GLASS_AUTHORIZED"
+                }
+            )
+
+            return {
+                "status": "EMERGENCY_BREAK_GLASS_AUTHORIZED",
+                "prescription_id": req.prescription_id,
+                "legal_status": "EMERGENCY_PROVISIONAL_ORDER_NABH_BREAK_GLASS",
+                "is_physician_signed": False,
+                "emergency_break_glass": {
+                    "is_emergency_override": True,
+                    "override_reason": req.emergency_override_reason,
+                    "invoked_at_utc": now_utc.isoformat(),
+                    "invoked_by": actor,
+                    "reconciliation_deadline_utc": reconciliation_deadline,
+                    "requires_24h_reconciliation": True,
+                    "statutory_mandate": "NABH Standard COP.6 / Code Red Resuscitation Exception"
+                },
+                "clinical_notes": req.clinical_notes,
+                "statutory_compliance": "NABH Emergency Protocol Compliant (Mandatory 24-Hour Post-Hoc RMP Reconciliation Required)"
+            }
+
         role = principal.get("role", "")
         allowed_roles = ("CONSULTANT_PHYSICIAN", "RESIDENT_PHYSICIAN", "MEDICAL_DIRECTOR", "SUPERADMIN")
         if role not in allowed_roles:
@@ -1186,7 +1233,7 @@ if HAS_FASTAPI:
                 "physician_name": req.physician_name,
                 "rmp_registration_number": req.rmp_registration_number,
                 "council_affiliation": req.council_affiliation,
-                "signed_at_utc": datetime.now(timezone.utc).isoformat(),
+                "signed_at_utc": now_utc.isoformat(),
                 "actor_principal": principal.get("sub", "UNKNOWN")
             },
             "clinical_notes": req.clinical_notes,
@@ -1867,7 +1914,39 @@ class AppShim:
         entry = obstetrics_engine.record_partograph_observation(patient_id, hours, dilatation_cm, fhr, contractions)
         return {"patient_id": patient_id, "action_line_breached": entry.action_line_breached}
 
-    def sign_prescription(self, prescription_id: str, physician_name: str, rmp_registration_number: str, council_affiliation: str = "NATIONAL_MEDICAL_COMMISSION", clinical_notes: Optional[str] = None) -> Dict[str, Any]:
+    def sign_prescription(
+        self,
+        prescription_id: str,
+        physician_name: str = "EMERGENCY_PRESCRIBER",
+        rmp_registration_number: Optional[str] = None,
+        council_affiliation: str = "NATIONAL_MEDICAL_COMMISSION",
+        clinical_notes: Optional[str] = None,
+        is_emergency_override: bool = False,
+        emergency_override_reason: Optional[str] = None
+    ) -> Dict[str, Any]:
+        now_utc = datetime.now(timezone.utc)
+        if is_emergency_override:
+            if not emergency_override_reason or not emergency_override_reason.strip():
+                raise ValueError("NABH Emergency Break-Glass requires a mandatory clinical justification (e.g., CODE RED RESUSCITATION).")
+            reconciliation_deadline = (now_utc + timedelta(hours=24)).isoformat()
+            return {
+                "status": "EMERGENCY_BREAK_GLASS_AUTHORIZED",
+                "prescription_id": prescription_id,
+                "legal_status": "EMERGENCY_PROVISIONAL_ORDER_NABH_BREAK_GLASS",
+                "is_physician_signed": False,
+                "emergency_break_glass": {
+                    "is_emergency_override": True,
+                    "override_reason": emergency_override_reason,
+                    "invoked_at_utc": now_utc.isoformat(),
+                    "invoked_by": physician_name or "EMERGENCY_STAFF",
+                    "reconciliation_deadline_utc": reconciliation_deadline,
+                    "requires_24h_reconciliation": True,
+                    "statutory_mandate": "NABH Standard COP.6 / Code Red Resuscitation Exception"
+                },
+                "clinical_notes": clinical_notes,
+                "statutory_compliance": "NABH Emergency Protocol Compliant (Mandatory 24-Hour Post-Hoc RMP Reconciliation Required)"
+            }
+
         if not rmp_registration_number or not rmp_registration_number.strip():
             raise ValueError("Statutory RMP registration number is mandatory under NMC Act 2019.")
         return {
@@ -1879,7 +1958,7 @@ class AppShim:
                 "physician_name": physician_name,
                 "rmp_registration_number": rmp_registration_number,
                 "council_affiliation": council_affiliation,
-                "signed_at_utc": datetime.now(timezone.utc).isoformat()
+                "signed_at_utc": now_utc.isoformat()
             },
             "clinical_notes": clinical_notes,
             "statutory_compliance": "NMC Act 2019 / Telemedicine Practice Guidelines 2020 Compliant"

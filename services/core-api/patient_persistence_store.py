@@ -147,6 +147,52 @@ class PatientPersistenceStore:
             );
             """)
 
+            # 8. Blood Bank Units & Hemovigilance Inventory (Phase 39)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS blood_bank_units (
+                unit_barcode TEXT PRIMARY KEY,
+                blood_group TEXT NOT NULL,
+                component_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                expiry_date TEXT NOT NULL,
+                reserved_for_mrn TEXT,
+                last_updated TEXT NOT NULL
+            );
+            """)
+
+            # 9. NDPS Schedule X Narcotics Perpetual Vault Ledger (Phase 39)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS narcotic_vault_ledger (
+                entry_id TEXT PRIMARY KEY,
+                drug_id TEXT NOT NULL,
+                batch_number TEXT NOT NULL,
+                transaction_type TEXT NOT NULL,
+                quantity_change INTEGER NOT NULL,
+                running_balance INTEGER NOT NULL,
+                primary_user_id TEXT NOT NULL,
+                secondary_user_id TEXT NOT NULL,
+                patient_id TEXT,
+                order_id TEXT,
+                timestamp TEXT NOT NULL,
+                prev_hash TEXT NOT NULL,
+                current_hash TEXT NOT NULL,
+                metadata_json TEXT
+            );
+            """)
+
+            # 10. Edge Resource Resiliency Leases (Phase 39)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS edge_resource_leases (
+                lease_id TEXT PRIMARY KEY,
+                node_id TEXT NOT NULL,
+                resource_id TEXT NOT NULL,
+                resource_type TEXT NOT NULL,
+                granted_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                is_active INTEGER NOT NULL
+            );
+            """)
+
             conn.commit()
 
     # ----------------------------------------------------------------------------------------------
@@ -577,6 +623,179 @@ class PatientPersistenceStore:
             if row:
                 return float(row["cumulative_dose"])
         return 0.0
+
+    # ----------------------------------------------------------------------------------------------
+    # BLOOD BANK INVENTORY PERSISTENCE (PHASE 39)
+    # ----------------------------------------------------------------------------------------------
+
+    def save_blood_unit(
+        self,
+        unit_barcode: str,
+        blood_group: str,
+        component_type: str = "PACKED_RED_BLOOD_CELLS",
+        status: str = "AVAILABLE_IN_INVENTORY",
+        expiry_date: str = "2026-10-30",
+        reserved_for_mrn: Optional[str] = None
+    ):
+        """Atomically saves or updates a blood bank unit in persistent storage."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT INTO blood_bank_units (unit_barcode, blood_group, component_type, status, expiry_date, reserved_for_mrn, last_updated)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(unit_barcode) DO UPDATE SET
+                blood_group = excluded.blood_group,
+                component_type = excluded.component_type,
+                status = excluded.status,
+                expiry_date = excluded.expiry_date,
+                reserved_for_mrn = excluded.reserved_for_mrn,
+                last_updated = excluded.last_updated;
+            """, (unit_barcode, blood_group, component_type, status, expiry_date, reserved_for_mrn, now))
+            conn.commit()
+
+    def get_blood_unit(self, unit_barcode: str) -> Optional[Dict[str, Any]]:
+        """Retrieves details of a blood unit from persistent storage."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT unit_barcode, blood_group, component_type, status, expiry_date, reserved_for_mrn, last_updated
+            FROM blood_bank_units WHERE unit_barcode = ?;
+            """, (unit_barcode,))
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+        return None
+
+    def get_all_blood_units(self) -> Dict[str, Dict[str, Any]]:
+        """Retrieves all blood units indexed by unit barcode."""
+        units = {}
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT unit_barcode, blood_group, component_type, status, expiry_date, reserved_for_mrn, last_updated
+            FROM blood_bank_units;
+            """)
+            for row in cursor.fetchall():
+                units[row["unit_barcode"]] = dict(row)
+        return units
+
+    # ----------------------------------------------------------------------------------------------
+    # NDPS NARCOTICS VAULT LEDGER PERSISTENCE (PHASE 39)
+    # ----------------------------------------------------------------------------------------------
+
+    def append_narcotic_ledger_entry(
+        self,
+        entry_id: str,
+        drug_id: str,
+        batch_number: str,
+        transaction_type: str,
+        quantity_change: int,
+        running_balance: int,
+        primary_user_id: str,
+        secondary_user_id: str,
+        patient_id: Optional[str],
+        order_id: Optional[str],
+        timestamp: str,
+        prev_hash: str,
+        current_hash: str,
+        metadata_json: Optional[str] = "{}"
+    ):
+        """Atomically appends a cryptographically-chained narcotic ledger entry."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT INTO narcotic_vault_ledger (
+                entry_id, drug_id, batch_number, transaction_type, quantity_change,
+                running_balance, primary_user_id, secondary_user_id, patient_id,
+                order_id, timestamp, prev_hash, current_hash, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(entry_id) DO NOTHING;
+            """, (
+                entry_id, drug_id, batch_number, transaction_type, quantity_change,
+                running_balance, primary_user_id, secondary_user_id, patient_id,
+                order_id, timestamp, prev_hash, current_hash, metadata_json
+            ))
+            conn.commit()
+
+    def get_narcotic_ledger(self, drug_id: str) -> List[Dict[str, Any]]:
+        """Retrieves ordered perpetual ledger entries for a controlled narcotic drug."""
+        entries = []
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT entry_id, drug_id, batch_number, transaction_type, quantity_change,
+                   running_balance, primary_user_id, secondary_user_id, patient_id,
+                   order_id, timestamp, prev_hash, current_hash, metadata_json
+            FROM narcotic_vault_ledger
+            WHERE drug_id = ?
+            ORDER BY rowid ASC;
+            """, (drug_id,))
+            for row in cursor.fetchall():
+                entries.append(dict(row))
+        return entries
+
+    def get_all_narcotic_balances(self) -> Dict[str, int]:
+        """Retrieves the latest running balance for all narcotic drugs."""
+        balances = {}
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT drug_id, running_balance
+            FROM narcotic_vault_ledger
+            WHERE rowid IN (
+                SELECT MAX(rowid) FROM narcotic_vault_ledger GROUP BY drug_id
+            );
+            """)
+            for row in cursor.fetchall():
+                balances[row["drug_id"]] = int(row["running_balance"])
+        return balances
+
+    # ----------------------------------------------------------------------------------------------
+    # EDGE RESOURCE LEASES PERSISTENCE (PHASE 39)
+    # ----------------------------------------------------------------------------------------------
+
+    def save_edge_lease(
+        self,
+        lease_id: str,
+        node_id: str,
+        resource_id: str,
+        resource_type: str,
+        granted_at: str,
+        expires_at: str,
+        is_active: bool = True
+    ):
+        """Atomically saves or updates an edge resource lease."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT INTO edge_resource_leases (
+                lease_id, node_id, resource_id, resource_type, granted_at, expires_at, is_active
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(lease_id) DO UPDATE SET
+                node_id = excluded.node_id,
+                resource_id = excluded.resource_id,
+                resource_type = excluded.resource_type,
+                granted_at = excluded.granted_at,
+                expires_at = excluded.expires_at,
+                is_active = excluded.is_active;
+            """, (lease_id, node_id, resource_id, resource_type, granted_at, expires_at, 1 if is_active else 0))
+            conn.commit()
+
+    def get_all_edge_leases(self) -> List[Dict[str, Any]]:
+        """Retrieves all edge resource leases."""
+        leases = []
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT lease_id, node_id, resource_id, resource_type, granted_at, expires_at, is_active
+            FROM edge_resource_leases;
+            """)
+            for row in cursor.fetchall():
+                d = dict(row)
+                d["is_active"] = bool(d["is_active"])
+                leases.append(d)
+        return leases
 
 
 # Global singleton instance

@@ -32,11 +32,19 @@ def normalize_blood_group(bg: str) -> str:
     return clean
 
 class BloodBankEngine:
-    def __init__(self, tenant_id: str):
+    def __init__(self, tenant_id: str, persistence_store: Optional[Any] = None):
         self.tenant_id = tenant_id
+        self._persistence_store = persistence_store
         self._inventory: Dict[str, Dict] = {} # unit_id -> unit_details
         self._crossmatch_log: List[Dict] = []
         self._adverse_reactions: List[Dict] = []
+
+        if self._persistence_store and hasattr(self._persistence_store, "get_all_blood_units"):
+            try:
+                persisted_units = self._persistence_store.get_all_blood_units()
+                self._inventory.update(persisted_units)
+            except Exception:
+                pass
 
     def register_blood_unit(
         self,
@@ -53,6 +61,17 @@ class BloodBankEngine:
             "status": "AVAILABLE_IN_INVENTORY",
             "expiry_date": expiry_date
         }
+        if self._persistence_store and hasattr(self._persistence_store, "save_blood_unit"):
+            try:
+                self._persistence_store.save_blood_unit(
+                    unit_barcode=unit_barcode,
+                    blood_group=norm_bg,
+                    component_type=component_type,
+                    status="AVAILABLE_IN_INVENTORY",
+                    expiry_date=expiry_date
+                )
+            except Exception:
+                pass
 
     def verify_and_crossmatch_unit(
         self,
@@ -87,6 +106,19 @@ class BloodBankEngine:
 
         # Crossmatch Approved
         unit["status"] = "RESERVED_FOR_TRANSFUSION"
+        if self._persistence_store and hasattr(self._persistence_store, "save_blood_unit"):
+            try:
+                self._persistence_store.save_blood_unit(
+                    unit_barcode=unit_barcode,
+                    blood_group=donor_norm,
+                    component_type=unit.get("component_type", "PACKED_RED_BLOOD_CELLS"),
+                    status="RESERVED_FOR_TRANSFUSION",
+                    expiry_date=unit.get("expiry_date", "2026-10-30"),
+                    reserved_for_mrn=recipient_mrn
+                )
+            except Exception:
+                pass
+
         crossmatch_record = {
             "crossmatch_id": str(uuid.uuid4()),
             "order_id": transfusion_order_id,

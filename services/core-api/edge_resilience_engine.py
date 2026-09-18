@@ -82,7 +82,8 @@ class EdgeResilienceEngine:
     MAX_RPO_SECONDS = 300       # 5 minutes
     MAX_RTO_SECONDS = 14400     # 4 hours (240 minutes)
 
-    def __init__(self):
+    def __init__(self, persistence_store: Optional[Any] = None):
+        self.persistence_store = persistence_store
         self.is_wan_online: bool = True
         self._nodes: Dict[str, EdgeNodeState] = {
             "EDGE_NODE_01": EdgeNodeState(node_id="EDGE_NODE_01"),
@@ -98,6 +99,35 @@ class EdgeResilienceEngine:
         # WAL Shipping Simulator State
         self._last_wal_flush_time: datetime = datetime.now(timezone.utc)
 
+        if self.persistence_store is not None:
+            self._restore_from_persistence()
+
+    def _restore_from_persistence(self):
+        """Restores persisted edge leases and node assignments."""
+        if not self.persistence_store:
+            return
+        persisted_leases = self.persistence_store.get_all_edge_leases()
+        for l in persisted_leases:
+            if not l.get("is_active", True):
+                continue
+            try:
+                granted_dt = datetime.fromisoformat(l["granted_at"])
+                expires_dt = datetime.fromisoformat(l["expires_at"])
+            except Exception:
+                continue
+            lease = EdgeLease(
+                lease_id=l["lease_id"],
+                node_id=l["node_id"],
+                resource_id=l["resource_id"],
+                resource_type=l["resource_type"],
+                granted_at=granted_dt,
+                expires_at=expires_dt,
+                is_active=l["is_active"]
+            )
+            self._leases[lease.resource_id] = lease
+            if lease.node_id in self._nodes:
+                self._nodes[lease.node_id].assigned_leases.add(lease.resource_id)
+
     # =========================================================================
     # 14.1 PESSIMISTIC LEASING & 72-HOUR OFFLINE OPERATION
     # =========================================================================
@@ -107,12 +137,13 @@ class EdgeResilienceEngine:
         node_id: str,
         resource_id: str,
         resource_type: str,
-        duration_days: int = 7,
+        duration_days: Any = 7,
     ) -> EdgeLease:
         """Grants an exclusive pessimistic lease for a Class A physical resource to an edge node."""
         if node_id not in self._nodes:
             raise EdgeResilienceError(f"Node {node_id} unrecognized.")
 
+        valid_days = duration_days if isinstance(duration_days, (int, float)) else 7
         now = datetime.now(timezone.utc)
         lease = EdgeLease(
             lease_id=f"LEASE-{node_id}-{resource_id}",
@@ -120,7 +151,7 @@ class EdgeResilienceEngine:
             resource_id=resource_id,
             resource_type=resource_type,
             granted_at=now,
-            expires_at=now + timedelta(days=duration_days),
+            expires_at=now + timedelta(days=valid_days),
         )
         # Revoke resource from any prior node to guarantee exclusive partition ownership
         for existing_node in self._nodes.values():
@@ -128,6 +159,18 @@ class EdgeResilienceEngine:
 
         self._leases[resource_id] = lease
         self._nodes[node_id].assigned_leases.add(resource_id)
+
+        if self.persistence_store is not None:
+            self.persistence_store.save_edge_lease(
+                lease_id=lease.lease_id,
+                node_id=lease.node_id,
+                resource_id=lease.resource_id,
+                resource_type=lease.resource_type,
+                granted_at=lease.granted_at.isoformat(),
+                expires_at=lease.expires_at.isoformat(),
+                is_active=lease.is_active
+            )
+
         return lease
 
     def disconnect_hospital_wan(self) -> None:

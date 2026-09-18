@@ -982,6 +982,175 @@ STG_PROTOCOL_CATALOG: Dict[str, ClinicalSTGProtocol] = {
 }
 
 
+# ====================================================================================================
+# JAN AUSHADHI (PMBJP) GENERIC FORMULARY CATALOG (PHASE 39)
+# ====================================================================================================
+
+PMBJP_GENERIC_CATALOG: Dict[str, Dict[str, Any]] = {
+    "aspirin": {
+        "generic_name": "Aspirin (Acetylsalicylic Acid)",
+        "pmbjp_drug_code": "PMBJP-0012",
+        "dosage_form": "Tablet 75mg / 150mg / 300mg",
+        "pmbjp_mrp_inr": 4.50,
+        "market_brand_mrp_inr": 35.00,
+        "estimated_patient_savings_percent": 87.1
+    },
+    "clopidogrel": {
+        "generic_name": "Clopidogrel",
+        "pmbjp_drug_code": "PMBJP-0158",
+        "dosage_form": "Tablet 75mg",
+        "pmbjp_mrp_inr": 18.00,
+        "market_brand_mrp_inr": 110.00,
+        "estimated_patient_savings_percent": 83.6
+    },
+    "atorvastatin": {
+        "generic_name": "Atorvastatin Calcium",
+        "pmbjp_drug_code": "PMBJP-0089",
+        "dosage_form": "Tablet 10mg / 20mg / 40mg / 80mg",
+        "pmbjp_mrp_inr": 12.00,
+        "market_brand_mrp_inr": 95.00,
+        "estimated_patient_savings_percent": 87.4
+    },
+    "ceftriaxone": {
+        "generic_name": "Ceftriaxone Sodium",
+        "pmbjp_drug_code": "PMBJP-0245",
+        "dosage_form": "Injection 1g vial",
+        "pmbjp_mrp_inr": 28.00,
+        "market_brand_mrp_inr": 140.00,
+        "estimated_patient_savings_percent": 80.0
+    },
+    "metronidazole": {
+        "generic_name": "Metronidazole",
+        "pmbjp_drug_code": "PMBJP-0312",
+        "dosage_form": "Tablet 400mg / IV Infusion 500mg/100ml",
+        "pmbjp_mrp_inr": 8.50,
+        "market_brand_mrp_inr": 48.00,
+        "estimated_patient_savings_percent": 82.3
+    },
+    "paracetamol": {
+        "generic_name": "Paracetamol (Acetaminophen)",
+        "pmbjp_drug_code": "PMBJP-0001",
+        "dosage_form": "Tablet 500mg / 650mg / Syrup 120mg/5ml",
+        "pmbjp_mrp_inr": 5.00,
+        "market_brand_mrp_inr": 32.00,
+        "estimated_patient_savings_percent": 84.4
+    },
+    "ciprofloxacin": {
+        "generic_name": "Ciprofloxacin HCl",
+        "pmbjp_drug_code": "PMBJP-0115",
+        "dosage_form": "Tablet 500mg / Eye Drops 0.3%",
+        "pmbjp_mrp_inr": 19.50,
+        "market_brand_mrp_inr": 90.00,
+        "estimated_patient_savings_percent": 78.3
+    },
+    "tramadol": {
+        "generic_name": "Tramadol HCl",
+        "pmbjp_drug_code": "PMBJP-0420",
+        "dosage_form": "Capsule 50mg / Injection 50mg/ml",
+        "pmbjp_mrp_inr": 14.00,
+        "market_brand_mrp_inr": 72.00,
+        "estimated_patient_savings_percent": 80.6
+    },
+    "amoxicillin": {
+        "generic_name": "Amoxicillin / Amoxicillin-Clavulanate",
+        "pmbjp_drug_code": "PMBJP-0052",
+        "dosage_form": "Tablet 500mg / 625mg",
+        "pmbjp_mrp_inr": 45.00,
+        "market_brand_mrp_inr": 210.00,
+        "estimated_patient_savings_percent": 78.6
+    },
+    "azithromycin": {
+        "generic_name": "Azithromycin",
+        "pmbjp_drug_code": "PMBJP-0077",
+        "dosage_form": "Tablet 500mg",
+        "pmbjp_mrp_inr": 38.00,
+        "market_brand_mrp_inr": 145.00,
+        "estimated_patient_savings_percent": 73.8
+    },
+    "pantoprazole": {
+        "generic_name": "Pantoprazole Sodium",
+        "pmbjp_drug_code": "PMBJP-0360",
+        "dosage_form": "Tablet 40mg / Injection 40mg",
+        "pmbjp_mrp_inr": 11.00,
+        "market_brand_mrp_inr": 85.00,
+        "estimated_patient_savings_percent": 87.1
+    },
+    "metformin": {
+        "generic_name": "Metformin Hydrochloride",
+        "pmbjp_drug_code": "PMBJP-0298",
+        "dosage_form": "Tablet 500mg / SR 1000mg",
+        "pmbjp_mrp_inr": 6.50,
+        "market_brand_mrp_inr": 42.00,
+        "estimated_patient_savings_percent": 84.5
+    },
+    "ondansetron": {
+        "generic_name": "Ondansetron HCl",
+        "pmbjp_drug_code": "PMBJP-0340",
+        "dosage_form": "Tablet 4mg / Injection 2mg/ml",
+        "pmbjp_mrp_inr": 7.00,
+        "market_brand_mrp_inr": 45.00,
+        "estimated_patient_savings_percent": 84.4
+    },
+    "salbutamol": {
+        "generic_name": "Salbutamol Sulphate",
+        "pmbjp_drug_code": "PMBJP-0390",
+        "dosage_form": "Inhaler 100mcg (200 metered doses) / Respules",
+        "pmbjp_mrp_inr": 65.00,
+        "market_brand_mrp_inr": 185.00,
+        "estimated_patient_savings_percent": 64.9
+    }
+}
+
+
+def generate_vernacular_guidance(disease_name: str, calculated_orders: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Generates plain-language, 5th-grade reading level patient-facing instructions and red flags
+    in English, Hindi (हिन्दी), and Bengali (বাংলা).
+    """
+    med_names = ", ".join(o["drug_name"] for o in calculated_orders)
+    return {
+        "en": {
+            "language": "English",
+            "plain_language_summary": f"Prescription guidance for {disease_name}. You have been prescribed: {med_names}.",
+            "dosage_schedule_instructions": [
+                f"{o['drug_name']}: {o['prescribed_dose']} via {o['route'].lower()}, frequency: {o['frequency']}. {o['instructions']}"
+                for o in calculated_orders
+            ],
+            "critical_red_flags": [
+                "Seek immediate emergency medical care if you experience severe chest pain, shortness of breath, sudden dizziness, facial swelling, or an extensive skin rash.",
+                "Never abruptly stop taking prescribed medications without consulting your treating doctor."
+            ],
+            "jan_aushadhi_affordability_note": "High-quality, certified generic alternatives for these medicines are available at Pradhan Mantri Bhartiya Janaushadhi Kendras (PMBJP) at 50% to 90% lower cost."
+        },
+        "hi": {
+            "language": "Hindi (हिन्दी)",
+            "plain_language_summary": f"{disease_name} के लिए आवश्यक दवा निर्देश। आपको ये दवाइयाँ परामर्श की गई हैं: {med_names}।",
+            "dosage_schedule_instructions": [
+                f"{o['drug_name']}: मात्रा {o['prescribed_dose']}, सेवन विधि: {o['route']}, समय: {o['frequency']}। {o['instructions']}"
+                for o in calculated_orders
+            ],
+            "critical_red_flags": [
+                "यदि सीने में तेज दर्द, सांस लेने में अत्यधिक तकलीफ, अचानक चक्कर आना, चेहरे या होंठों पर सूजन, या त्वचा पर लाल चकत्ते हों तो तुरंत नजदीकी अस्पताल के आपातकालीन कक्ष (Emergency) में जाएं।",
+                "चिकित्सक से परामर्श किए बिना अपनी दवाइयाँ कभी भी बीच में बंद न करें।"
+            ],
+            "jan_aushadhi_affordability_note": "इन दवाओं के उच्च गुणवत्ता वाले प्रमाणित जेनेरिक विकल्प प्रधानमंत्री भारतीय जन औषधि केंद्र (PMBJP) पर 50% से 90% तक कम कीमत पर उपलब्ध हैं।"
+        },
+        "bn": {
+            "language": "Bengali (বাংলা)",
+            "plain_language_summary": f"{disease_name}-এর চিকিৎসার জন্য ঔষধ নির্দেশিকা। আপনার জন্য নির্ধারিত ঔষধগুলি হলো: {med_names}।",
+            "dosage_schedule_instructions": [
+                f"{o['drug_name']}: মাত্রা {o['prescribed_dose']}, সেবনপদ্ধতি: {o['route']}, সময়: {o['frequency']}। {o['instructions']}"
+                for o in calculated_orders
+            ],
+            "critical_red_flags": [
+                "বুকে তীব্র ব্যথা, শ্বাসকষ্ট, হঠাৎ মাথা ঘোরা, রক্তপাত, মুখ বা ঠোঁট ফুলে যাওয়া, বা শরীরে লাল ফুসকুড়ি দেখা দিলে অবিলম্বে নিকটস্থ হাসপাতালের জরুরি বিভাগে যোগাযোগ করুন।",
+                "চিকিৎসকের পরামর্শ ছাড়া কোনো ঔষধ সেবন হঠাৎ বন্ধ করবেন না।"
+            ],
+            "jan_aushadhi_affordability_note": "এই ওষুধগুলির উচ্চমানের শংসাপত্রপ্রাপ্ত জেনেরিক বিকল্পগুলি প্রধানমন্ত্রী ভারতীয় জনঔষধী কেন্দ্র (PMBJP) থেকে ৫০% থেকে ৯০% সাশ্রয়ী মূল্যে সংগ্রহ করা যেতে পারে।"
+        }
+    }
+
+
 class PrescriptionProtocolEngine:
     """
     Standard Treatment Guideline (STG) Prescription Generation Engine.
@@ -1142,6 +1311,28 @@ class PrescriptionProtocolEngine:
         import uuid
         prescription_id = f"RX-PROT-{uuid.uuid4().hex[:10].upper()}"
 
+        # Match Jan Aushadhi (PMBJP) Generic Equivalents
+        jan_aushadhi_matches = []
+        for o in calculated_orders:
+            drug_clean = o["drug_name"].strip().lower()
+            match = None
+            for pmbjp_key, pmbjp_data in PMBJP_GENERIC_CATALOG.items():
+                if pmbjp_key in drug_clean or drug_clean in pmbjp_key:
+                    match = pmbjp_data
+                    break
+            if match:
+                jan_aushadhi_matches.append({
+                    "prescribed_drug": o["drug_name"],
+                    "pmbjp_generic_name": match["generic_name"],
+                    "pmbjp_drug_code": match["pmbjp_drug_code"],
+                    "dosage_form": match["dosage_form"],
+                    "pmbjp_mrp_inr": match["pmbjp_mrp_inr"],
+                    "market_brand_mrp_inr": match["market_brand_mrp_inr"],
+                    "estimated_savings_percent": match["estimated_patient_savings_percent"]
+                })
+
+        vernacular_guidance = generate_vernacular_guidance(protocol.disease_name, calculated_orders)
+
         return {
             "status": "GENERATED",
             "legal_status": "DRAFT_DECISION_SUPPORT_REQUIRES_PHYSICIAN_SIGNATURE",
@@ -1167,6 +1358,8 @@ class PrescriptionProtocolEngine:
             "therapeutic_monitoring": protocol.therapeutic_monitoring,
             "urgent_interventions": protocol.urgent_interventions,
             "clinical_pearls": protocol.clinical_pearls,
+            "vernacular_patient_guidance": vernacular_guidance,
+            "jan_aushadhi_generic_equivalents": jan_aushadhi_matches,
             "formulary_safety_certification": {
                 "safe_to_prescribe": screen_res.get("is_safe_to_dispense", True),
                 "lethal_hard_stops": screen_res.get("lethal_violations", []),
