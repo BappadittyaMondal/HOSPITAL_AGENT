@@ -136,6 +136,17 @@ class PatientPersistenceStore:
             );
             """)
 
+            # 7. Cumulative Lifetime Drug Doses (Chemotherapy / Organ Toxicity Persistence)
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS patient_cumulative_lifetime_doses (
+                patient_id TEXT NOT NULL,
+                drug_key TEXT NOT NULL,
+                cumulative_dose REAL NOT NULL,
+                last_updated TEXT NOT NULL,
+                PRIMARY KEY (patient_id, drug_key)
+            );
+            """)
+
             conn.commit()
 
     # ----------------------------------------------------------------------------------------------
@@ -536,6 +547,38 @@ class PatientPersistenceStore:
             "total_recorded_observations": len(observations)
         }
 
+    # ----------------------------------------------------------------------------------------------
+    # CUMULATIVE LIFETIME TOXICITY PERSISTENCE (PHASE 38 C-06 / W1)
+    # ----------------------------------------------------------------------------------------------
+
+    def record_lifetime_dose(self, patient_id: str, drug_key: str, cumulative_dose: float):
+        """Atomically persists updated cumulative lifetime dose for patient and drug."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT INTO patient_cumulative_lifetime_doses (patient_id, drug_key, cumulative_dose, last_updated)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(patient_id, drug_key) DO UPDATE SET
+                cumulative_dose = excluded.cumulative_dose,
+                last_updated = excluded.last_updated;
+            """, (patient_id, drug_key.lower().strip(), cumulative_dose, now))
+            conn.commit()
+
+    def get_lifetime_dose(self, patient_id: str, drug_key: str) -> float:
+        """Retrieves persistent cumulative lifetime dose for patient and drug."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT cumulative_dose FROM patient_cumulative_lifetime_doses
+            WHERE patient_id = ? AND drug_key = ?;
+            """, (patient_id, drug_key.lower().strip()))
+            row = cursor.fetchone()
+            if row:
+                return float(row["cumulative_dose"])
+        return 0.0
+
 
 # Global singleton instance
 global_patient_persistence_store = PatientPersistenceStore()
+

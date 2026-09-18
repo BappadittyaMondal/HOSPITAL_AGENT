@@ -1139,8 +1139,16 @@ class PrescriptionProtocolEngine:
             patient_allergies=known_allergies
         )
 
+        import uuid
+        prescription_id = f"RX-PROT-{uuid.uuid4().hex[:10].upper()}"
+
         return {
             "status": "GENERATED",
+            "legal_status": "DRAFT_DECISION_SUPPORT_REQUIRES_PHYSICIAN_SIGNATURE",
+            "statutory_disclaimer": "REQUIRES VERIFICATION AND DIGITAL SIGNATURE BY NMC REGISTERED MEDICAL PRACTITIONER (RMP) UNDER NMC ACT 2019. DISPENSING PROHIBITED WITHOUT PHYSICIAN SIGNATURE. DRAFT CLINICAL DECISION SUPPORT ONLY — NOT AN AUTONOMOUS PRESCRIPTION UNDER TELEMEDICINE PRACTICE GUIDELINES 2020.",
+            "is_physician_signed": False,
+            "signed_by_rmp": None,
+            "prescription_id": prescription_id,
             "disease_key": protocol.disease_key,
             "disease_name": protocol.disease_name,
             "category": protocol.category,

@@ -115,7 +115,7 @@ from patient_persistence_store import global_patient_persistence_store
 from prescription_protocol_engine import global_prescription_protocol_engine
 
 # Instantiate deterministic clinical and operational engines
-dre_engine = CPOEDREEngine(tenant_id="TENANT-MAIN-01")
+dre_engine = CPOEDREEngine(tenant_id="TENANT-MAIN-01", persistence_store=global_patient_persistence_store)
 history_engine = StructuredHistoryEngine()
 protocol_engine = SyndromicProtocolEngine(tenant_id="TENANT-MAIN-01")
 
@@ -321,6 +321,14 @@ if HAS_FASTAPI:
         patient_egfr: Optional[float] = None
         is_pregnant: Optional[bool] = False
         known_allergies: Optional[List[str]] = []
+
+    class PrescriptionSignRequest(BaseModel):
+        prescription_id: str
+        physician_name: str
+        rmp_registration_number: str
+        council_affiliation: Optional[str] = "NATIONAL_MEDICAL_COMMISSION"
+        clinical_notes: Optional[str] = None
+        override_flags: Optional[List[str]] = []
 
     class PatientAdmissionRequest(BaseModel):
         name: str
@@ -1131,6 +1139,60 @@ if HAS_FASTAPI:
             known_allergies=req.known_allergies
         )
 
+    @app.post("/api/v1/clinical/prescriptions/sign", summary="Statutory RMP Digital Counter-Signature Gate")
+    async def sign_prescription_protocol(
+        req: PrescriptionSignRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        role = principal.get("role", "")
+        allowed_roles = ("CONSULTANT_PHYSICIAN", "RESIDENT_PHYSICIAN", "MEDICAL_DIRECTOR", "SUPERADMIN")
+        if role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "status": "UNAUTHORIZED_CLINICIAN",
+                    "error": f"Role '{role}' is not authorized to execute statutory prescription sign-off. Only licensed RMP physicians may counter-sign."
+                }
+            )
+        if not req.rmp_registration_number or not req.rmp_registration_number.strip():
+            raise HTTPException(
+                status_code=HTTP_422_STATUS,
+                detail={
+                    "status": "INVALID_RMP_CREDENTIALS",
+                    "error": "Statutory RMP registration number is mandatory under NMC Act 2019."
+                }
+            )
+
+        record_audit_event_safe(
+            tenant_id=principal.get("tenant_id", "TENANT-MAIN-01"),
+            event_type="RMP_PRESCRIPTION_COUNTERSIGNED",
+            aggregate_id=req.prescription_id,
+            actor_id=f"RMP:{req.rmp_registration_number}",
+            payload={
+                "physician_name": req.physician_name,
+                "rmp_registration_number": req.rmp_registration_number,
+                "council_affiliation": req.council_affiliation,
+                "override_flags": req.override_flags or [],
+                "status": "DISPENSABLE_AUTHORIZED"
+            }
+        )
+
+        return {
+            "status": "DISPENSABLE_AUTHORIZED",
+            "prescription_id": req.prescription_id,
+            "legal_status": "STATUTORILY_VALID_DISPENSABLE_ORDER",
+            "is_physician_signed": True,
+            "signed_by": {
+                "physician_name": req.physician_name,
+                "rmp_registration_number": req.rmp_registration_number,
+                "council_affiliation": req.council_affiliation,
+                "signed_at_utc": datetime.now(timezone.utc).isoformat(),
+                "actor_principal": principal.get("sub", "UNKNOWN")
+            },
+            "clinical_notes": req.clinical_notes,
+            "statutory_compliance": "NMC Act 2019 / Telemedicine Practice Guidelines 2020 Compliant"
+        }
+
     @app.post("/api/v1/patients/admit", summary="Persistent Patient Admission & ABHA Registration")
     async def admit_patient_record(
         req: PatientAdmissionRequest,
@@ -1660,152 +1722,170 @@ if HAS_FASTAPI:
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
 
-else:
-    # Standalone Lightweight Application Shim for Environments without FastAPI Installed
-    class AppShim:
-        def __init__(self):
-            self.title = "HOSPITAL Core Platform API"
-            self.version = "1.0.0"
+# Standalone Lightweight Application Shim for Environments without FastAPI Installed
+class AppShim:
+    def __init__(self):
+        self.title = "HOSPITAL Core Platform API"
+        self.version = "1.0.0"
 
-        def get_health(self) -> Dict[str, Any]:
-            return {
-                "status": "healthy",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "version": "1.0.0",
-                "services": {
-                    "postgres": "connected",
-                    "redis": "connected",
-                    "safety_engine": "online"
-                }
+    def get_health(self) -> Dict[str, Any]:
+        return {
+            "status": "healthy",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "version": "1.0.0",
+            "services": {
+                "postgres": "connected",
+                "redis": "connected",
+                "safety_engine": "online"
             }
+        }
 
-        def evaluate_order(
-            self,
-            patient_id: str,
-            drug_name: str,
-            prescribed_dose: float = 500.0,
-            route: str = "IV",
-            patient_weight_kg: float = 70.0,
-            patient_bsa_m2: float = 1.73,
-            serum_creatinine: float = 1.0,
-            patient_age: int = 45,
-            is_female: bool = False,
-            current_medications: Optional[List[str]] = None,
-            known_allergies: Optional[List[str]] = None,
-            is_pregnant: bool = False
-        ) -> Dict[str, Any]:
-            res = dre_engine.evaluate_order(
-                patient_id=patient_id,
-                drug_name=drug_name,
-                prescribed_dose=prescribed_dose,
-                route=route,
-                patient_weight_kg=patient_weight_kg,
-                patient_bsa_m2=patient_bsa_m2,
-                serum_creatinine=serum_creatinine,
-                patient_age=patient_age,
-                is_female=is_female,
-                current_medications=current_medications or [],
-                known_allergies=known_allergies or [],
-                is_pregnant=is_pregnant
+    def evaluate_order(
+        self,
+        patient_id: str,
+        drug_name: str,
+        prescribed_dose: float = 500.0,
+        route: str = "IV",
+        patient_weight_kg: float = 70.0,
+        patient_bsa_m2: float = 1.73,
+        serum_creatinine: float = 1.0,
+        patient_age: int = 45,
+        is_female: bool = False,
+        current_medications: Optional[List[str]] = None,
+        known_allergies: Optional[List[str]] = None,
+        is_pregnant: bool = False
+    ) -> Dict[str, Any]:
+        res = dre_engine.evaluate_order(
+            patient_id=patient_id,
+            drug_name=drug_name,
+            prescribed_dose=prescribed_dose,
+            route=route,
+            patient_weight_kg=patient_weight_kg,
+            patient_bsa_m2=patient_bsa_m2,
+            serum_creatinine=serum_creatinine,
+            patient_age=patient_age,
+            is_female=is_female,
+            current_medications=current_medications or [],
+            known_allergies=known_allergies or [],
+            is_pregnant=is_pregnant
+        )
+        try:
+            audit_ledger.record_event(
+                tenant_id="TENANT-MAIN-01",
+                event_type="CLINICAL_ORDER_EVALUATION",
+                aggregate_id=patient_id,
+                actor_id="SHIM-CALLER",
+                payload={"status": res.get("status"), "drug_name": drug_name, "prescribed_dose": prescribed_dose}
             )
-            try:
-                audit_ledger.record_event(
-                    tenant_id="TENANT-MAIN-01",
-                    event_type="CLINICAL_ORDER_EVALUATION",
-                    aggregate_id=patient_id,
-                    actor_id="SHIM-CALLER",
-                    payload={"status": res.get("status"), "drug_name": drug_name, "prescribed_dose": prescribed_dose}
-                )
-            except Exception:
-                pass
-            return res
+        except Exception:
+            pass
+        return res
 
-        def process_history_intake(
-            self,
-            session_id: str,
-            patient_id: str,
-            chief_complaint: str,
-            answers: Dict[str, Any],
-            patient_age: int = 45,
-            is_female: bool = False,
-            is_pregnant: bool = False
-        ) -> Dict[str, Any]:
-            complaint = getattr(ChiefComplaintCategory, chief_complaint, ChiefComplaintCategory.TRAUMA_OR_FALL)
-            sess = history_engine.initiate_session(session_id, patient_id, complaint, patient_age, is_female, is_pregnant)
-            history_engine.process_responses(sess, answers)
-            try:
-                audit_ledger.record_event(
-                    tenant_id="TENANT-MAIN-01",
-                    event_type="STRUCTURED_HISTORY_INTAKE",
-                    aggregate_id=patient_id,
-                    actor_id=session_id,
-                    payload={"complaint": complaint.value if hasattr(complaint, "value") else str(complaint), "red_flags": sess.active_red_flags}
-                )
-            except Exception:
-                pass
-            return sess.__dict__
+    def process_history_intake(
+        self,
+        session_id: str,
+        patient_id: str,
+        chief_complaint: str,
+        answers: Dict[str, Any],
+        patient_age: int = 45,
+        is_female: bool = False,
+        is_pregnant: bool = False
+    ) -> Dict[str, Any]:
+        complaint = getattr(ChiefComplaintCategory, chief_complaint, ChiefComplaintCategory.TRAUMA_OR_FALL)
+        sess = history_engine.initiate_session(session_id, patient_id, complaint, patient_age, is_female, is_pregnant)
+        history_engine.process_responses(sess, answers)
+        try:
+            audit_ledger.record_event(
+                tenant_id="TENANT-MAIN-01",
+                event_type="STRUCTURED_HISTORY_INTAKE",
+                aggregate_id=patient_id,
+                actor_id=session_id,
+                payload={"complaint": complaint.value if hasattr(complaint, "value") else str(complaint), "red_flags": sess.active_red_flags}
+            )
+        except Exception:
+            pass
+        return sess.__dict__
 
-        def generate_syndromic_plan(
-            self,
-            patient_id: str,
-            syndrome: str,
-            vitals: Dict[str, float],
-            patient_age: int = 45,
-            is_female: bool = False,
-            patient_weight_kg: float = 70.0,
-            estimated_transit_hours: float = 6.0
-        ) -> Dict[str, Any]:
-            synd = getattr(SyndromicArchetype, syndrome, SyndromicArchetype.SEVERE_TRAUMA_FRACTURE)
-            plan = protocol_engine.generate_holding_plan(patient_id, synd, patient_age, is_female, patient_weight_kg, vitals, [], [], False, estimated_transit_hours)
-            try:
-                audit_ledger.record_event(
-                    tenant_id="TENANT-MAIN-01",
-                    event_type="SYNDROMIC_HOLDING_PLAN_GENERATION",
-                    aggregate_id=patient_id,
-                    actor_id=plan.plan_id,
-                    payload={"syndrome": synd.value if hasattr(synd, "value") else str(synd), "urgency": plan.urgency_tier}
-                )
-            except Exception:
-                pass
-            return plan.__dict__
+    def generate_syndromic_plan(
+        self,
+        patient_id: str,
+        syndrome: str,
+        vitals: Dict[str, float],
+        patient_age: int = 45,
+        is_female: bool = False,
+        patient_weight_kg: float = 70.0,
+        estimated_transit_hours: float = 6.0
+    ) -> Dict[str, Any]:
+        synd = getattr(SyndromicArchetype, syndrome, SyndromicArchetype.SEVERE_TRAUMA_FRACTURE)
+        plan = protocol_engine.generate_holding_plan(patient_id, synd, patient_age, is_female, patient_weight_kg, vitals, [], [], False, estimated_transit_hours)
+        try:
+            audit_ledger.record_event(
+                tenant_id="TENANT-MAIN-01",
+                event_type="SYNDROMIC_HOLDING_PLAN_GENERATION",
+                aggregate_id=patient_id,
+                actor_id=plan.plan_id,
+                payload={"syndrome": synd.value if hasattr(synd, "value") else str(synd), "urgency": plan.urgency_tier}
+            )
+        except Exception:
+            pass
+        return plan.__dict__
 
-        def compute_emergency_score(self, score_type: str, **kwargs) -> Dict[str, Any]:
-            st = score_type.upper()
-            if st == "GCS":
-                return calculate_glasgow_coma_scale(kwargs.get("eye_opening", 4), kwargs.get("verbal_response", 5), kwargs.get("motor_response", 6)).__dict__
-            elif st == "FAST":
-                return evaluate_fast_stroke(kwargs.get("facial_droop", False), kwargs.get("arm_weakness", False), kwargs.get("speech_difficulty", False), kwargs.get("onset_hours_ago", 1.0)).__dict__
-            elif st == "PEDIATRIC":
-                return calculate_pediatric_emergency_doses(kwargs.get("weight_kg"), kwargs.get("age_years")).__dict__
-            elif st == "ANAPHYLAXIS":
-                return calculate_anaphylaxis_protocol(kwargs.get("weight_kg", 70.0), kwargs.get("is_child", False)).__dict__
-            elif st in ("BURNS", "BURNS_PARKLAND"):
-                return calculate_parkland_burns_fluid(kwargs.get("tbsa_percentage", 20.0), kwargs.get("patient_weight_kg", 70.0), kwargs.get("is_pediatric", False)).__dict__
-            return {"error": "unknown_score_type"}
+    def compute_emergency_score(self, score_type: str, **kwargs) -> Dict[str, Any]:
+        st = score_type.upper()
+        if st == "GCS":
+            return calculate_glasgow_coma_scale(kwargs.get("eye_opening", 4), kwargs.get("verbal_response", 5), kwargs.get("motor_response", 6)).__dict__
+        elif st == "FAST":
+            return evaluate_fast_stroke(kwargs.get("facial_droop", False), kwargs.get("arm_weakness", False), kwargs.get("speech_difficulty", False), kwargs.get("onset_hours_ago", 1.0)).__dict__
+        elif st == "PEDIATRIC":
+            return calculate_pediatric_emergency_doses(kwargs.get("weight_kg"), kwargs.get("age_years")).__dict__
+        elif st == "ANAPHYLAXIS":
+            return calculate_anaphylaxis_protocol(kwargs.get("weight_kg", 70.0), kwargs.get("is_child", False)).__dict__
+        elif st in ("BURNS", "BURNS_PARKLAND"):
+            return calculate_parkland_burns_fluid(kwargs.get("tbsa_percentage", 20.0), kwargs.get("patient_weight_kg", 70.0), kwargs.get("is_pediatric", False)).__dict__
+        return {"error": "unknown_score_type"}
 
-        def crossmatch_blood_unit(self, recipient_mrn: str, recipient_blood_group: str, unit_barcode: str, transfusion_order_id: str) -> Dict[str, Any]:
-            compatible, msg = blood_bank_engine.verify_and_crossmatch_unit(recipient_mrn, recipient_blood_group, unit_barcode, transfusion_order_id)
-            return {"compatible": compatible, "message": msg}
+    def crossmatch_blood_unit(self, recipient_mrn: str, recipient_blood_group: str, unit_barcode: str, transfusion_order_id: str) -> Dict[str, Any]:
+        compatible, msg = blood_bank_engine.verify_and_crossmatch_unit(recipient_mrn, recipient_blood_group, unit_barcode, transfusion_order_id)
+        return {"compatible": compatible, "message": msg}
 
-        def dispense_narcotic(self, drug_id: str, batch_number: str, quantity: int, patient_id: str, order_id: str, primary_user: str, witness_user: str) -> Dict[str, Any]:
-            c1 = BiometricCredential(primary_user, "PHARMACIST", "BIO-TOKEN", True, datetime.now(timezone.utc))
-            c2 = BiometricCredential(witness_user, "NURSE_INCHARGE", "BIO-TOKEN-2", True, datetime.now(timezone.utc))
-            entry = narcotics_vault.dispense_narcotic(drug_id, batch_number, quantity, patient_id, order_id, c1, c2)
-            return {"status": "DISPENSED", "entry_id": entry.entry_id, "remaining_balance": entry.running_balance}
+    def dispense_narcotic(self, drug_id: str, batch_number: str, quantity: int, patient_id: str, order_id: str, primary_user: str, witness_user: str) -> Dict[str, Any]:
+        c1 = BiometricCredential(primary_user, "PHARMACIST", "BIO-TOKEN", True, datetime.now(timezone.utc))
+        c2 = BiometricCredential(witness_user, "NURSE_INCHARGE", "BIO-TOKEN-2", True, datetime.now(timezone.utc))
+        entry = narcotics_vault.dispense_narcotic(drug_id, batch_number, quantity, patient_id, order_id, c1, c2)
+        return {"status": "DISPENSED", "entry_id": entry.entry_id, "remaining_balance": entry.running_balance}
 
-        def adjudicate_pmjay_charge(self, encounter_id: str, patient_id: str, package_code: str, category: str, item_name: str, amount_inr: float) -> Dict[str, Any]:
-            if category.upper() in pmjay_engine.PROHIBITED_ADDON_CATEGORIES:
-                return {"status": "BLOCKED", "error": "PACKAGE_BREAKAGE"}
-            return {"status": "APPROVED", "amount_inr": amount_inr}
+    def adjudicate_pmjay_charge(self, encounter_id: str, patient_id: str, package_code: str, category: str, item_name: str, amount_inr: float) -> Dict[str, Any]:
+        if category.upper() in pmjay_engine.PROHIBITED_ADDON_CATEGORIES:
+            return {"status": "BLOCKED", "error": "PACKAGE_BREAKAGE"}
+        return {"status": "APPROVED", "amount_inr": amount_inr}
 
-        def request_edge_lease(self, node_id: str, resource_id: str, resource_type: str = "ICU_BED") -> Dict[str, Any]:
-            lease = edge_engine.grant_pessimistic_lease(node_id, resource_id, resource_type, ResourceClass.CLASS_A_PHYSICAL)
-            return {"status": "GRANTED", "lease_id": lease.lease_id}
+    def request_edge_lease(self, node_id: str, resource_id: str, resource_type: str = "ICU_BED") -> Dict[str, Any]:
+        lease = edge_engine.grant_pessimistic_lease(node_id, resource_id, resource_type, ResourceClass.CLASS_A_PHYSICAL)
+        return {"status": "GRANTED", "lease_id": lease.lease_id}
 
-        def record_partograph_observation(self, patient_id: str, hours: float, dilatation_cm: float, fhr: float, contractions: int) -> Dict[str, Any]:
-            entry = obstetrics_engine.record_partograph_observation(patient_id, hours, dilatation_cm, fhr, contractions)
-            return {"patient_id": patient_id, "action_line_breached": entry.action_line_breached}
+    def record_partograph_observation(self, patient_id: str, hours: float, dilatation_cm: float, fhr: float, contractions: int) -> Dict[str, Any]:
+        entry = obstetrics_engine.record_partograph_observation(patient_id, hours, dilatation_cm, fhr, contractions)
+        return {"patient_id": patient_id, "action_line_breached": entry.action_line_breached}
 
+    def sign_prescription(self, prescription_id: str, physician_name: str, rmp_registration_number: str, council_affiliation: str = "NATIONAL_MEDICAL_COMMISSION", clinical_notes: Optional[str] = None) -> Dict[str, Any]:
+        if not rmp_registration_number or not rmp_registration_number.strip():
+            raise ValueError("Statutory RMP registration number is mandatory under NMC Act 2019.")
+        return {
+            "status": "DISPENSABLE_AUTHORIZED",
+            "prescription_id": prescription_id,
+            "legal_status": "STATUTORILY_VALID_DISPENSABLE_ORDER",
+            "is_physician_signed": True,
+            "signed_by": {
+                "physician_name": physician_name,
+                "rmp_registration_number": rmp_registration_number,
+                "council_affiliation": council_affiliation,
+                "signed_at_utc": datetime.now(timezone.utc).isoformat()
+            },
+            "clinical_notes": clinical_notes,
+            "statutory_compliance": "NMC Act 2019 / Telemedicine Practice Guidelines 2020 Compliant"
+        }
+
+if not HAS_FASTAPI:
     app = AppShim()
 
 

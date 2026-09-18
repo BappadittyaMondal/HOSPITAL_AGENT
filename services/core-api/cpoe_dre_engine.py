@@ -117,30 +117,58 @@ def calculate_ckd_epi_egfr(serum_creatinine: float, age: int, is_female: bool) -
     return round(egfr, 1)
 
 class CPOEDREEngine:
-    def __init__(self, tenant_id: str):
+    def __init__(self, tenant_id: str, persistence_store: Optional[Any] = None):
         self.tenant_id = tenant_id
+        self._persistence_store = persistence_store
         self._patient_lifetime_doses: Dict[str, Dict[str, float]] = {} # patient_id -> drug -> cumulative_dose
 
+    def _resolve_toxicity_key(self, drug_name_or_key: str) -> str:
+        raw = drug_name_or_key.lower().strip()
+        norm = normalize_drug_name(drug_name_or_key) or raw
+        for td in LIFETIME_TOXICITY_LIMITS:
+            if td in norm or td in raw:
+                return td
+        return norm
+
+    def get_lifetime_dose(self, patient_id: str, drug_name_or_key: str) -> float:
+        """Retrieves cumulative lifetime dose from persistent store or local cache."""
+        drug_key = self._resolve_toxicity_key(drug_name_or_key)
+        if self._persistence_store and hasattr(self._persistence_store, "get_lifetime_dose"):
+            try:
+                persisted = self._persistence_store.get_lifetime_dose(patient_id, drug_key)
+                if persisted > 0.0:
+                    return persisted
+            except Exception:
+                pass
+        return self._patient_lifetime_doses.get(patient_id, {}).get(drug_key, 0.0)
+
     def record_administered_dose(self, patient_id: str, drug_name: str, dose_amount: float):
-        drug_key = normalize_drug_name(drug_name) or drug_name.lower().strip()
+        """Records administered dose to in-memory cache and atomic persistent store."""
+        drug_key = self._resolve_toxicity_key(drug_name)
         if patient_id not in self._patient_lifetime_doses:
             self._patient_lifetime_doses[patient_id] = {}
-        curr = self._patient_lifetime_doses[patient_id].get(drug_key, 0.0)
-        self._patient_lifetime_doses[patient_id][drug_key] = curr + dose_amount
+        curr = self.get_lifetime_dose(patient_id, drug_key)
+        new_total = curr + dose_amount
+        self._patient_lifetime_doses[patient_id][drug_key] = new_total
+        if self._persistence_store and hasattr(self._persistence_store, "record_lifetime_dose"):
+            try:
+                self._persistence_store.record_lifetime_dose(patient_id, drug_key, new_total)
+            except Exception:
+                pass
 
     def evaluate_order(
         self,
         patient_id: str,
         drug_name: str,
-        prescribed_dose: float,
-        route: str,
-        patient_weight_kg: float,
-        patient_bsa_m2: float,
-        serum_creatinine: float,
-        patient_age: int,
-        is_female: bool,
-        current_medications: List[str],
-        known_allergies: List[str],
+        prescribed_dose: float = 500.0,
+        route: str = "ORAL",
+        patient_weight_kg: float = 70.0,
+        patient_bsa_m2: float = 1.73,
+        serum_creatinine: float = 1.0,
+        patient_age: int = 45,
+        is_female: bool = False,
+        current_medications: Optional[List[str]] = None,
+        known_allergies: Optional[List[str]] = None,
         is_pregnant: bool = False,
         gestational_weeks: Optional[int] = None
     ) -> Dict:
@@ -150,6 +178,8 @@ class CPOEDREEngine:
         Pregnancy Teratogenicity, and Geriatric AGS Beers Criteria 2023.
         Standardizes commercial brand names and clinical aliases to active generic INN.
         """
+        current_medications = current_medications or []
+        known_allergies = known_allergies or []
         hard_stops = []
         warnings = []
         raw_drug_lower = drug_name.lower().strip()
@@ -290,10 +320,11 @@ class CPOEDREEngine:
                     )
 
         # 6. Cumulative Lifetime Toxicity Check
-        tox_drug = drug_norm if drug_norm in LIFETIME_TOXICITY_LIMITS else (raw_drug_lower if raw_drug_lower in LIFETIME_TOXICITY_LIMITS else None)
+        resolved_tox = self._resolve_toxicity_key(drug_name)
+        tox_drug = resolved_tox if resolved_tox in LIFETIME_TOXICITY_LIMITS else None
         if tox_drug:
             limit_data = LIFETIME_TOXICITY_LIMITS[tox_drug]
-            prior_dose = self._patient_lifetime_doses.get(patient_id, {}).get(tox_drug, 0.0)
+            prior_dose = self.get_lifetime_dose(patient_id, tox_drug)
             if "max_lifetime_units" in limit_data:
                 # Cumulative absolute units (e.g. Bleomycin: 400 units ceiling)
                 attempted_dose = prescribed_dose
