@@ -123,6 +123,7 @@ class PediatricEmergencyDoses:
     salbutamol_nebulization_mg: float
     ors_rehydration_first_4h_ml: float
     rectal_diazepam_mg: float
+    weight_provenance: str = "MEASURED"
 
 
 def calculate_pediatric_emergency_doses(
@@ -133,7 +134,8 @@ def calculate_pediatric_emergency_doses(
     Field-portable pediatric emergency medication dosing based on weight or age estimation.
     Uses WHO/APLS formulas: Weight = (Age + 4) * 2 for ages 1-10 if weight unknown.
     """
-    if weight_kg is None or weight_kg <= 0:
+    is_estimated = (weight_kg is None or weight_kg <= 0)
+    if is_estimated:
         if age_years is not None and age_years > 0:
             if age_years < 1:
                 weight_kg = 5.0 + (age_years * 5.0)
@@ -163,6 +165,8 @@ def calculate_pediatric_emergency_doses(
     # Rectal Diazepam for seizing child: 0.5 mg/kg (max 10 mg)
     diazepam_mg = min(10.0, round(weight_kg * 0.5, 1))
 
+    provenance_tag = "APLS_AGE_ESTIMATED" if is_estimated else "MEASURED"
+
     return PediatricEmergencyDoses(
         weight_kg=weight_kg,
         age_years_estimated=round(age_years, 1),
@@ -170,7 +174,8 @@ def calculate_pediatric_emergency_doses(
         ceftriaxone_meningitis_sepsis_mg=ceftriaxone_mg,
         salbutamol_nebulization_mg=salbutamol_mg,
         ors_rehydration_first_4h_ml=ors_ml,
-        rectal_diazepam_mg=diazepam_mg
+        rectal_diazepam_mg=diazepam_mg,
+        weight_provenance=provenance_tag
     )
 
 

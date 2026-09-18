@@ -26,6 +26,7 @@ class ChiefComplaintCategory(str, Enum):
     FEVER_OR_INFECTION = "FEVER_OR_INFECTION"
     OBSTETRIC_EMERGENCY = "OBSTETRIC_EMERGENCY"
     TOXIC_OR_SNAKEBITE = "TOXIC_OR_SNAKEBITE"
+    DERMATOLOGIC_PIGMENTARY_OR_RASH = "DERMATOLOGIC_PIGMENTARY_OR_RASH"
 
 
 class FindingPolarity(str, Enum):
@@ -57,6 +58,13 @@ class HistoryIntakeSession:
     active_red_flags: List[str] = field(default_factory=list)
     recommended_immediate_actions: List[str] = field(default_factory=list)
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    current_turn: int = 0
+    planned_question_ids: List[str] = field(default_factory=list)
+    pending_question: Optional[Dict[str, Any]] = None
+    unanswered_question_ids: List[str] = field(default_factory=list)
+    intake_status: str = "IN_PROGRESS"
+    partial_differential: List[Dict[str, Any]] = field(default_factory=list)
+    unexcluded_must_not_miss: List[str] = field(default_factory=list)
 
 
 class StructuredHistoryEngine:
@@ -113,6 +121,8 @@ class StructuredHistoryEngine:
             self._process_obstetric(session, answers)
         elif category == ChiefComplaintCategory.TOXIC_OR_SNAKEBITE:
             self._process_toxicology(session, answers)
+        elif category == ChiefComplaintCategory.DERMATOLOGIC_PIGMENTARY_OR_RASH:
+            self._process_dermatologic_pigmentary(session, answers)
 
         return session
 
@@ -446,3 +456,339 @@ class StructuredHistoryEngine:
                 "Administer ATROPINE 2mg IV bolus every 5 minutes until atropinization achieved (lungs clear, HR > 80, pupils dilated)",
                 "Secure airway; excessive bronchial secretions are the leading cause of death"
             ])
+
+    def _process_dermatologic_pigmentary(self, session: HistoryIntakeSession, ans: Dict[str, Any]):
+        palmar_creases = ans.get("palmar_crease_darkening", False)
+        buccal_mucosa = ans.get("buccal_mucosa_darkening", False)
+        orthostatic = ans.get("orthostatic_dizziness", False)
+        paresthesia = ans.get("peripheral_tingling_numbness", False)
+        tube_well = ans.get("tube_well_drinking_water", False)
+        weight_loss = ans.get("unexplained_weight_loss_fatigue", False)
+        hair_dye = ans.get("chemical_hair_dye_contact", False)
+
+        if palmar_creases:
+            session.findings.append(StructuredFinding(
+                concept_name="Palmar crease hyperpigmentation",
+                snomed_id="247441003",
+                polarity=FindingPolarity.PRESENT,
+                is_red_flag=False,
+                clinical_note="Hyperpigmentation concentrated in palmar and interphalangeal flexion creases"
+            ))
+
+        if buccal_mucosa:
+            session.findings.append(StructuredFinding(
+                concept_name="Oral mucosal hyperpigmentation",
+                snomed_id="247443000",
+                polarity=FindingPolarity.PRESENT,
+                is_red_flag=True,
+                clinical_note="Oral hyperpigmentation indicates elevated ACTH/POMC or severe cobalamin deficiency"
+            ))
+
+        if orthostatic:
+            session.findings.append(StructuredFinding(
+                concept_name="Postural orthostatic dizziness",
+                snomed_id="28651003",
+                polarity=FindingPolarity.PRESENT,
+                is_red_flag=True,
+                clinical_note="Orthostatic instability suggests mineralocorticoid deficiency / hypovolemia"
+            ))
+
+        if paresthesia:
+            session.findings.append(StructuredFinding(
+                concept_name="Paresthesia of extremities",
+                snomed_id="91019004",
+                polarity=FindingPolarity.PRESENT,
+                is_red_flag=False,
+                clinical_note="Distal symmetrical pins-and-needles sensation"
+            ))
+
+        if tube_well:
+            session.findings.append(StructuredFinding(
+                concept_name="Untreated groundwater exposure",
+                snomed_id="425400000",
+                polarity=FindingPolarity.PRESENT,
+                is_red_flag=False,
+                clinical_note="Chronic tube-well groundwater consumption in endemic arsenic belt"
+            ))
+
+        # Red Flag and Action Logic
+        if palmar_creases and (orthostatic or buccal_mucosa or weight_loss):
+            if "SUSPECTED_ADDISONS_ADRENAL_INSUFFICIENCY_CRISIS_RISK" not in session.active_red_flags:
+                session.active_red_flags.append("SUSPECTED_ADDISONS_ADRENAL_INSUFFICIENCY_CRISIS_RISK")
+            session.recommended_immediate_actions.extend([
+                "STAT Serum Electrolytes (Sodium, Potassium, Chloride): Evaluate for life-threatening hyponatremia and hyperkalemia",
+                "8:00 AM Fasting Serum Cortisol and Plasma ACTH before starting exogenous steroids",
+                "Rule out Adrenal Tuberculosis (Chest X-ray, Mantoux/IGRA, Contrast CT Adrenals)",
+                "If systolic BP < 90 mmHg or intractable vomiting: Initiate emergency Normal Saline IV bolus and hydrocortisone 100mg IV"
+            ])
+
+        if palmar_creases and paresthesia:
+            if "SUSPECTED_VITAMIN_B12_DEFICIENCY_NEUROPATHY" not in session.active_red_flags:
+                session.active_red_flags.append("SUSPECTED_VITAMIN_B12_DEFICIENCY_NEUROPATHY")
+            session.recommended_immediate_actions.extend([
+                "Order Serum Vitamin B12, Serum Folate, and Complete Blood Count with Peripheral Smear (MCV)",
+                "NEVER administer Folic Acid alone without verifying Vitamin B12 (risk of precipitating Subacute Combined Degeneration)"
+            ])
+
+        if palmar_creases and tube_well:
+            if "SUSPECTED_CHRONIC_ARSENICOSIS_MELANOSIS" not in session.active_red_flags:
+                session.active_red_flags.append("SUSPECTED_CHRONIC_ARSENICOSIS_MELANOSIS")
+            session.recommended_immediate_actions.extend([
+                "Test primary drinking water source for Arsenic (> 10 mcg/L BIS limit)",
+                "Conduct whole-body cutaneous exam for raindrop pigmentation on trunk and punctate palmar/plantar keratosis",
+                "Provide immediate arsenic-safe drinking water alternative"
+            ])
+
+        if hair_dye and not (buccal_mucosa or orthostatic or paresthesia or tube_well):
+            session.recommended_immediate_actions.append(
+                "Likely exogenous staining (PPD / contact): Discontinue chemical contact; skin will gradually exfoliate over 3-6 weeks"
+            )
+
+    # ----------------------------------------------------------------------------------------------
+    # Sequential Interactive Elicitation & Partial-Intake Fallback
+    # ----------------------------------------------------------------------------------------------
+
+    QUESTION_CATALOG: Dict[str, Dict[str, Any]] = {
+        # Cutaneous & Pigmentary Questions
+        "Q_PALMAR_CREASES": {
+            "question_id": "Q_PALMAR_CREASES",
+            "attribute_key": "palmar_crease_darkening",
+            "question_text": "Are the skin creases on the palms of your hands noticeably darker than surrounding skin?",
+            "clinical_purpose": "Identifies localized palmar crease hyperpigmentation (classic marker of ACTH/POMC excess or cobalamin deficiency)",
+            "options": ["YES", "NO", "UNSURE"]
+        },
+        "Q_BUCCAL_MUCOSA": {
+            "question_id": "Q_BUCCAL_MUCOSA",
+            "attribute_key": "buccal_mucosa_darkening",
+            "question_text": "Look inside your mouth with a light. Are there dark, brownish or bluish-black patches inside your cheeks, gums, or tongue?",
+            "clinical_purpose": "Differentiates systemic mucosal hyperpigmentation (Addison's / ACTH excess) from isolated contact skin staining",
+            "options": ["YES", "NO", "UNSURE"]
+        },
+        "Q_ORTHOSTATIC_DIZZINESS": {
+            "question_id": "Q_ORTHOSTATIC_DIZZINESS",
+            "attribute_key": "orthostatic_dizziness",
+            "question_text": "Do you feel dizzy, lightheaded, or faint when standing up quickly, or crave salt?",
+            "clinical_purpose": "Screens for orthostatic hypotension and impending Addisonian crisis / mineralocorticoid deficiency",
+            "options": ["YES", "NO", "UNSURE"]
+        },
+        "Q_PERIPHERAL_PARESTHESIA": {
+            "question_id": "Q_PERIPHERAL_PARESTHESIA",
+            "attribute_key": "peripheral_tingling_numbness",
+            "question_text": "Do you experience tingling, pins-and-needles, or burning numbness in your feet, toes, or hands?",
+            "clinical_purpose": "Screens for Vitamin B12 deficiency peripheral neuropathy / Subacute Combined Degeneration",
+            "options": ["YES", "NO", "UNSURE"]
+        },
+        "Q_TUBE_WELL_WATER": {
+            "question_id": "Q_TUBE_WELL_WATER",
+            "attribute_key": "tube_well_drinking_water",
+            "question_text": "Is your primary daily drinking water from an untreated deep or shallow tube-well in an alluvial rural area?",
+            "clinical_purpose": "Evaluates environmental exposure risk to chronic groundwater Arsenic toxicity (Arsenicosis)",
+            "options": ["YES", "NO", "UNSURE"]
+        },
+        # Chest Pain Questions
+        "Q_CHEST_RADIATION": {
+            "question_id": "Q_CHEST_RADIATION",
+            "attribute_key": "radiates_to_left_arm_or_jaw",
+            "question_text": "Does your chest discomfort radiate to your left arm, shoulder, jaw, neck, or back?",
+            "clinical_purpose": "Evaluates ischemic cardiac pain radiation",
+            "options": ["YES", "NO", "UNSURE"]
+        },
+        "Q_CHEST_DIAPHORESIS": {
+            "question_id": "Q_CHEST_DIAPHORESIS",
+            "attribute_key": "has_cold_sweating",
+            "question_text": "Are you experiencing profuse cold sweating (diaphoresis) or unexplained clamminess?",
+            "clinical_purpose": "Autonomic sign of acute myocardial infarction / cardiogenic shock",
+            "options": ["YES", "NO", "UNSURE"]
+        },
+        "Q_EPIGASTRIC_DISTRESS": {
+            "question_id": "Q_EPIGASTRIC_DISTRESS",
+            "attribute_key": "epigastric_burning",
+            "question_text": "Is the discomfort primarily in the upper middle stomach (epigastrium) like severe indigestion?",
+            "clinical_purpose": "Screens for atypical silent acute coronary syndrome in diabetics/elderly",
+            "options": ["YES", "NO", "UNSURE"]
+        }
+    }
+
+    CATEGORY_QUESTION_FLOW: Dict[ChiefComplaintCategory, List[str]] = {
+        ChiefComplaintCategory.DERMATOLOGIC_PIGMENTARY_OR_RASH: [
+            "Q_PALMAR_CREASES",
+            "Q_BUCCAL_MUCOSA",
+            "Q_ORTHOSTATIC_DIZZINESS",
+            "Q_PERIPHERAL_PARESTHESIA",
+            "Q_TUBE_WELL_WATER"
+        ],
+        ChiefComplaintCategory.CHEST_PAIN: [
+            "Q_CHEST_RADIATION",
+            "Q_CHEST_DIAPHORESIS",
+            "Q_EPIGASTRIC_DISTRESS"
+        ]
+    }
+
+    def initiate_sequential_intake(
+        self,
+        session_id: str,
+        patient_id: str,
+        chief_complaint: ChiefComplaintCategory,
+        patient_age: int,
+        is_female: bool,
+        is_pregnant: bool = False
+    ) -> Dict[str, Any]:
+        session = self.initiate_session(
+            session_id=session_id,
+            patient_id=patient_id,
+            chief_complaint=chief_complaint,
+            patient_age=patient_age,
+            is_female=is_female,
+            is_pregnant=is_pregnant
+        )
+        flow = self.CATEGORY_QUESTION_FLOW.get(chief_complaint, [])
+        session.planned_question_ids = list(flow)
+        session.unanswered_question_ids = list(flow)
+        session.current_turn = 0
+        session.intake_status = "IN_PROGRESS"
+
+        first_q = None
+        if flow:
+            q_id = flow[0]
+            first_q = self.QUESTION_CATALOG.get(q_id)
+            session.pending_question = first_q
+
+        if not hasattr(self, "_active_sessions"):
+            self._active_sessions = {}
+        self._active_sessions[session_id] = session
+
+        return {
+            "session_id": session_id,
+            "patient_id": patient_id,
+            "intake_status": "IN_PROGRESS",
+            "current_turn": 1,
+            "total_turns_planned": len(flow),
+            "pending_question": first_q
+        }
+
+    def process_sequential_turn(
+        self,
+        session_id: str,
+        question_id: str,
+        answer_value: Any
+    ) -> Dict[str, Any]:
+        if not hasattr(self, "_active_sessions") or session_id not in self._active_sessions:
+            raise KeyError(f"Active clinical intake session '{session_id}' not found.")
+
+        session = self._active_sessions[session_id]
+        q_meta = self.QUESTION_CATALOG.get(question_id)
+        if not q_meta:
+            raise ValueError(f"Unknown clinical question ID '{question_id}'")
+
+        attr_key = q_meta["attribute_key"]
+        is_pos = (answer_value is True or str(answer_value).upper() in ("YES", "TRUE", "1"))
+
+        ans_dict = {attr_key: is_pos}
+        self.process_responses(session, ans_dict)
+
+        if question_id in session.unanswered_question_ids:
+            session.unanswered_question_ids.remove(question_id)
+        session.current_turn += 1
+
+        next_q = None
+        if session.unanswered_question_ids:
+            next_q_id = session.unanswered_question_ids[0]
+            next_q = self.QUESTION_CATALOG.get(next_q_id)
+            session.pending_question = next_q
+            status = "IN_PROGRESS"
+        else:
+            session.pending_question = None
+            session.intake_status = "COMPLETED"
+            status = "COMPLETED"
+
+        return {
+            "session_id": session_id,
+            "intake_status": status,
+            "current_turn": session.current_turn,
+            "remaining_questions": len(session.unanswered_question_ids),
+            "next_question": next_q,
+            "active_red_flags": session.active_red_flags,
+            "findings_count": len(session.findings)
+        }
+
+    def evaluate_partial_session(
+        self,
+        session_id: str
+    ) -> Dict[str, Any]:
+        """
+        Graceful Partial-Intake Fallback:
+        If patient drops off or disconnects mid-triage, computes a conservative provisional
+        differential from available evidence, flags unexcluded critical red flags, and emits
+        urgent clinical escalation guidance.
+        """
+        if not hasattr(self, "_active_sessions") or session_id not in self._active_sessions:
+            raise KeyError(f"Active clinical intake session '{session_id}' not found.")
+
+        session = self._active_sessions[session_id]
+        session.intake_status = "PARTIAL_FALLBACK"
+
+        unexcluded = []
+        partial_diff = []
+        unanswered_set = set(session.unanswered_question_ids)
+
+        if session.chief_complaint == ChiefComplaintCategory.DERMATOLOGIC_PIGMENTARY_OR_RASH:
+            has_palmar = any(f.snomed_id == "247441003" and f.polarity == FindingPolarity.PRESENT for f in session.findings)
+            if has_palmar:
+                if "Q_ORTHOSTATIC_DIZZINESS" in unanswered_set or "Q_BUCCAL_MUCOSA" in unanswered_set:
+                    unexcluded.append("PRIMARY_ADRENAL_INSUFFICIENCY_ADDISONS_CRISIS")
+                    partial_diff.append({
+                        "condition": "Primary Adrenal Insufficiency (Addison's Disease)",
+                        "priority": "MUST_NOT_MISS",
+                        "status": "UNEXCLUDED_HIGH_RISK",
+                        "reason": "Palmar crease hyperpigmentation present; orthostatic dizziness/mucosal involvement unanswered"
+                    })
+                if "Q_PERIPHERAL_PARESTHESIA" in unanswered_set:
+                    unexcluded.append("VITAMIN_B12_DEFICIENCY_NEUROPATHY")
+                    partial_diff.append({
+                        "condition": "Severe Vitamin B12 (Cobalamin) Deficiency",
+                        "priority": "HIGH",
+                        "status": "UNEXCLUDED",
+                        "reason": "Palmar hyperpigmentation present; peripheral tingling/neuropathy unanswered"
+                    })
+                if "Q_TUBE_WELL_WATER" in unanswered_set:
+                    unexcluded.append("CHRONIC_ARSENICOSIS_MELANOSIS")
+                    partial_diff.append({
+                        "condition": "Chronic Arsenic Toxicity (Arsenicosis)",
+                        "priority": "MODERATE",
+                        "status": "UNEXCLUDED",
+                        "reason": "Palmar hyperpigmentation present; tube-well groundwater source unverified"
+                    })
+
+        elif session.chief_complaint == ChiefComplaintCategory.CHEST_PAIN:
+            if "Q_CHEST_DIAPHORESIS" in unanswered_set or "Q_CHEST_RADIATION" in unanswered_set:
+                unexcluded.append("ACUTE_CORONARY_SYNDROME_MYOCARDIAL_INFARCTION")
+                partial_diff.append({
+                    "condition": "Acute Myocardial Infarction",
+                    "priority": "MUST_NOT_MISS",
+                    "status": "UNEXCLUDED_LETHAL",
+                    "reason": "Chest pain intake incomplete; autonomic diaphoresis/radiation unverified"
+                })
+
+        session.unexcluded_must_not_miss = unexcluded
+        session.partial_differential = partial_diff
+
+        safety_net_instructions = [
+            "PARTIAL CLINICAL INTAKE WARNING: Patient disconnected or timed out before evaluation completed.",
+            "Conservative rule-out mode engaged: Do not assume unasked or unanswered questions are negative.",
+            f"CRITICAL RULE-OUTS REMAINING UNEXCLUDED: {', '.join(unexcluded) if unexcluded else 'None'}",
+            "If patient is experiencing severe weakness, postural dizziness, blackouts, or vomiting: REPORT TO EMERGENCY ROOM IMMEDIATELY."
+        ]
+        session.recommended_immediate_actions = safety_net_instructions + session.recommended_immediate_actions
+
+        return {
+            "session_id": session.session_id,
+            "patient_id": session.patient_id,
+            "intake_status": "PARTIAL_FALLBACK",
+            "data_quality": "INCOMPLETE_INTAKE_FALLBACK",
+            "turns_completed": session.current_turn,
+            "unanswered_questions_count": len(session.unanswered_question_ids),
+            "unexcluded_must_not_miss": unexcluded,
+            "partial_differential": partial_diff,
+            "active_red_flags": session.active_red_flags,
+            "recommended_immediate_actions": session.recommended_immediate_actions
+        }

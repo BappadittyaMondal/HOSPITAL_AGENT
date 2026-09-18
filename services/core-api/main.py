@@ -38,8 +38,10 @@ try:
     from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel
     HAS_FASTAPI = True
+    HTTP_422_STATUS = getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", 422)
 except ImportError:
     HAS_FASTAPI = False
+    HTTP_422_STATUS = 422
 
 from db_session import outbox_manager, db_config
 from auth_manager import auth_security_manager
@@ -174,6 +176,22 @@ if HAS_FASTAPI:
         is_female: bool
         is_pregnant: Optional[bool] = False
         answers: Dict[str, Any] = {}
+
+    class SequentialIntakeStartRequest(BaseModel):
+        session_id: str
+        patient_id: str
+        chief_complaint: str
+        patient_age: int
+        is_female: bool
+        is_pregnant: Optional[bool] = False
+
+    class SequentialIntakeTurnRequest(BaseModel):
+        session_id: str
+        question_id: str
+        answer_value: Any
+
+    class SequentialIntakePartialFallbackRequest(BaseModel):
+        session_id: str
 
     class SyndromicHoldingPlanRequest(BaseModel):
         patient_id: str
@@ -330,8 +348,9 @@ if HAS_FASTAPI:
         is_blood_bank_ready = blood_bank_engine is not None and len(blood_bank_engine._inventory) > 0
         is_narcotics_ready = narcotics_vault is not None and len(narcotics_vault.balances) > 0
         is_edge_ready = edge_engine is not None
+        is_ledger_ready = audit_ledger is not None and (hasattr(audit_ledger, "db_path") or hasattr(audit_ledger, "_db_path"))
 
-        all_ready = is_dre_ready and is_blood_bank_ready and is_narcotics_ready and is_edge_ready
+        all_ready = is_dre_ready and is_blood_bank_ready and is_narcotics_ready and is_edge_ready and is_ledger_ready
         if not all_ready:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -342,7 +361,8 @@ if HAS_FASTAPI:
                         "dre_engine": is_dre_ready,
                         "blood_bank": is_blood_bank_ready,
                         "narcotics_vault": is_narcotics_ready,
-                        "edge_resilience": is_edge_ready
+                        "edge_resilience": is_edge_ready,
+                        "database_ledger": is_ledger_ready
                     }
                 }
             )
@@ -355,7 +375,8 @@ if HAS_FASTAPI:
                 "dre_engine": "HEALTHY",
                 "blood_bank": "HEALTHY",
                 "narcotics_vault": "HEALTHY",
-                "edge_resilience": "HEALTHY"
+                "edge_resilience": "HEALTHY",
+                "database_ledger": "HEALTHY"
             }
         }
 
@@ -463,7 +484,7 @@ if HAS_FASTAPI:
                 dose_val = parse_dose_string(item.dose)
             except ValueError as ve:
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=HTTP_422_STATUS,
                     detail={
                         "status": "INVALID_DOSE_FORMAT",
                         "error": f"Invalid dose '{item.dose}' for medication '{item.name}'. {str(ve)}"
@@ -564,6 +585,76 @@ if HAS_FASTAPI:
             ]
         }
 
+    @app.post("/api/v1/triage/history/sequential/start", summary="Initiate Interactive Sequential Clinical History Elicitation")
+    async def start_sequential_history_intake(
+        req: SequentialIntakeStartRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        try:
+            complaint = ChiefComplaintCategory(req.chief_complaint)
+        except ValueError:
+            complaint = ChiefComplaintCategory.DERMATOLOGIC_PIGMENTARY_OR_RASH
+        res = history_engine.initiate_sequential_intake(
+            session_id=req.session_id,
+            patient_id=req.patient_id,
+            chief_complaint=complaint,
+            patient_age=req.patient_age,
+            is_female=req.is_female,
+            is_pregnant=req.is_pregnant or False
+        )
+        record_audit_event_safe(
+            tenant_id=principal.get("tenant_id", "TENANT-MAIN-01"),
+            event_type="SEQUENTIAL_HISTORY_START",
+            aggregate_id=req.patient_id,
+            actor_id=req.session_id,
+            payload={"complaint": str(complaint), "planned_turns": res.get("total_turns_planned")}
+        )
+        return res
+
+    @app.post("/api/v1/triage/history/sequential/turn", summary="Submit Sequential Intake Answer Turn")
+    async def process_sequential_history_turn(
+        req: SequentialIntakeTurnRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        try:
+            res = history_engine.process_sequential_turn(
+                session_id=req.session_id,
+                question_id=req.question_id,
+                answer_value=req.answer_value
+            )
+        except KeyError as ke:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ke))
+        except ValueError as ve:
+            raise HTTPException(status_code=HTTP_422_STATUS, detail=str(ve))
+
+        record_audit_event_safe(
+            tenant_id=principal.get("tenant_id", "TENANT-MAIN-01"),
+            event_type="SEQUENTIAL_HISTORY_TURN",
+            aggregate_id=req.session_id,
+            actor_id=req.question_id,
+            payload={"turn": res.get("current_turn"), "status": res.get("intake_status")}
+        )
+        return res
+
+    @app.post("/api/v1/triage/history/sequential/partial-fallback", summary="Evaluate Partial Intake Session After Patient Drop-Off or Timeout")
+    async def evaluate_partial_history_fallback(
+        req: SequentialIntakePartialFallbackRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        try:
+            res = history_engine.evaluate_partial_session(session_id=req.session_id)
+        except KeyError as ke:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ke))
+
+        record_audit_event_safe(
+            tenant_id=principal.get("tenant_id", "TENANT-MAIN-01"),
+            event_type="PARTIAL_INTAKE_FALLBACK",
+            aggregate_id=req.session_id,
+            actor_id=principal.get("sub", "SYSTEM"),
+            payload={"status": "PARTIAL_FALLBACK", "unexcluded": res.get("unexcluded_must_not_miss")}
+        )
+        return res
+
     @app.post("/api/v1/triage/syndromic-holding-plan", summary="Generate 5-10 Hour Rural Pre-Hospital Holding Care Plan")
     async def generate_syndromic_plan(
         req: SyndromicHoldingPlanRequest,
@@ -635,7 +726,7 @@ if HAS_FASTAPI:
         elif st == "PEDIATRIC":
             if (req.patient_weight_kg is None or req.patient_weight_kg <= 0) and (req.patient_age_years is None or req.patient_age_years <= 0):
                 raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    status_code=HTTP_422_STATUS,
                     detail={
                         "status": "INSUFFICIENT_DATA",
                         "error": "Pediatric emergency scoring requires verified patient_weight_kg or patient_age_years. Default fabrication prohibited."
@@ -648,7 +739,7 @@ if HAS_FASTAPI:
                 )
                 return res.__dict__
             except ValueError as ve:
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"status": "INSUFFICIENT_DATA", "error": str(ve)})
+                raise HTTPException(status_code=HTTP_422_STATUS, detail={"status": "INSUFFICIENT_DATA", "error": str(ve)})
         elif st == "ANAPHYLAXIS":
             wt = req.patient_weight_kg if req.patient_weight_kg is not None and req.patient_weight_kg > 0 else (15.0 if req.is_child else 70.0)
             res = calculate_anaphylaxis_protocol(
