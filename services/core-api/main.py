@@ -113,6 +113,20 @@ from disease_knowledge_registry import global_disease_registry_engine, DISEASE_R
 from nlem_formulary_engine import global_nlem_formulary_engine
 from patient_persistence_store import global_patient_persistence_store
 from prescription_protocol_engine import global_prescription_protocol_engine
+from gynecology_oncology_engine import (
+    global_gynecology_oncology_engine,
+    AUBStructuralCategory,
+    AUBNonStructuralCategory,
+    PCOSPhenotype,
+    EndometriosisStage,
+    CervicalCytology
+)
+from pediatric_clinical_engine import (
+    global_pediatric_clinical_engine,
+    BroselowColorZone,
+    WHODehydrationGrade
+)
+
 
 # Instantiate deterministic clinical and operational engines
 dre_engine = CPOEDREEngine(tenant_id="TENANT-MAIN-01", persistence_store=global_patient_persistence_store)
@@ -415,6 +429,58 @@ if HAS_FASTAPI:
         fetal_heart_rate_bpm: float
         contractions_per_10min: int
         amniotic_fluid_state: Optional[str] = "CLEAR"
+
+    class FIGOAUBEvaluationRequest(BaseModel):
+        patient_id: str
+        patient_age: int
+        has_polyp: Optional[bool] = False
+        has_adenomyosis: Optional[bool] = False
+        has_leiomyoma: Optional[bool] = False
+        leiomyoma_submucosal: Optional[bool] = False
+        has_malignancy_or_atypical_hyperplasia: Optional[bool] = False
+        has_documented_coagulopathy: Optional[bool] = False
+        has_ovulatory_irregularity: Optional[bool] = False
+        has_endometrial_infection_or_endometritis: Optional[bool] = False
+        is_on_anticoagulants_or_iud: Optional[bool] = False
+        unclassified_findings: Optional[bool] = False
+        endometrial_thickness_mm: Optional[float] = None
+
+    class COCScreenRequest(BaseModel):
+        patient_id: str
+        patient_age: int
+        cigarettes_per_day: Optional[int] = 0
+        systolic_bp: Optional[float] = 120.0
+        diastolic_bp: Optional[float] = 80.0
+        has_prior_dvt_or_pe: Optional[bool] = False
+        has_migraine_with_aura: Optional[bool] = False
+        has_active_liver_disease: Optional[bool] = False
+        has_known_thrombophilia: Optional[bool] = False
+        is_postpartum_under_21_days: Optional[bool] = False
+
+    class CTGEvaluationRequest(BaseModel):
+        patient_id: str
+        baseline_fhr_bpm: float
+        variability_bpm: float
+        deceleration_type: Optional[str] = "NONE"
+        deceleration_duration_seconds: Optional[float] = 0.0
+
+    class GestationalTeratogenicityRequest(BaseModel):
+        patient_id: str
+        drug_name: str
+        is_pregnant: Optional[bool] = True
+
+    class PediatricFluidsRequest(BaseModel):
+        weight_kg: float
+
+    class BroselowResuscitationRequest(BaseModel):
+        length_cm: float
+
+    class HyperbilirubinemiaEvaluationRequest(BaseModel):
+        postnatal_age_hours: float
+        tsb_mg_per_dl: float
+        gestational_age_weeks: float
+        has_neurotoxicity_risk: Optional[bool] = False
+
 
     async def get_current_principal(
         authorization: Optional[str] = Header(None, alias="Authorization"),
@@ -1769,6 +1835,152 @@ if HAS_FASTAPI:
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
 
+    # ----------------------------------------------------------------------------------------------
+    # PHASE 40: CLINICAL SPECIALTY EXPANSIONS (GYNECOLOGY, OBSTETRICS & PEDIATRICS)
+    # ----------------------------------------------------------------------------------------------
+
+    @app.post("/api/v1/clinical/gynecology/evaluate-aub", summary="FIGO PALM-COEIN AUB & Post-Menopausal Biopsy Stratification")
+    async def evaluate_gynecology_aub(
+        req: FIGOAUBEvaluationRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        res = global_gynecology_oncology_engine.evaluate_aub_figo(
+            patient_id=req.patient_id,
+            patient_age=req.patient_age,
+            has_polyp=req.has_polyp or False,
+            has_adenomyosis=req.has_adenomyosis or False,
+            has_leiomyoma=req.has_leiomyoma or False,
+            leiomyoma_submucosal=req.leiomyoma_submucosal or False,
+            has_malignancy_or_atypical_hyperplasia=req.has_malignancy_or_atypical_hyperplasia or False,
+            has_documented_coagulopathy=req.has_documented_coagulopathy or False,
+            has_ovulatory_irregularity=req.has_ovulatory_irregularity or False,
+            has_endometrial_infection_or_endometritis=req.has_endometrial_infection_or_endometritis or False,
+            is_on_anticoagulants_or_iud=req.is_on_anticoagulants_or_iud or False,
+            unclassified_findings=req.unclassified_findings or False,
+            endometrial_thickness_mm=req.endometrial_thickness_mm
+        )
+        return {
+            "patient_id": res.patient_id,
+            "is_structural": res.is_structural,
+            "structural_types": [t.value for t in res.structural_types],
+            "non_structural_types": [t.value for t in res.non_structural_types],
+            "leiomyoma_subclassification": res.leiomyoma_subclassification,
+            "is_red_flag_malignancy": res.is_red_flag_malignancy,
+            "mandatory_evaluations": res.mandatory_evaluations,
+            "recommended_interventions": res.recommended_interventions
+        }
+
+    @app.post("/api/v1/clinical/gynecology/screen-coc", summary="Combined Oral Contraceptive (COC) Thromboembolism Firewall")
+    async def screen_coc_safety(
+        req: COCScreenRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        res = global_gynecology_oncology_engine.screen_coc_contraindications(
+            patient_id=req.patient_id,
+            patient_age=req.patient_age,
+            cigarettes_per_day=req.cigarettes_per_day or 0,
+            systolic_bp=req.systolic_bp or 120.0,
+            diastolic_bp=req.diastolic_bp or 80.0,
+            has_prior_dvt_or_pe=req.has_prior_dvt_or_pe or False,
+            has_migraine_with_aura=req.has_migraine_with_aura or False,
+            has_active_liver_disease=req.has_active_liver_disease or False,
+            has_known_thrombophilia=req.has_known_thrombophilia or False,
+            is_postpartum_under_21_days=req.is_postpartum_under_21_days or False
+        )
+        return {
+            "patient_id": req.patient_id,
+            "is_prescribing_safe": res.is_prescribing_safe,
+            "contraindication_severity": res.contraindication_severity,
+            "contraindications_detected": res.contraindications_detected,
+            "safe_alternative_contraceptives": res.safe_alternative_contraceptives
+        }
+
+    @app.post("/api/v1/clinical/obstetrics/evaluate-ctg", summary="Intrapartum CTG/EFM Waveform Classification & Category 1 C-Section Trigger")
+    async def evaluate_obstetric_ctg(
+        req: CTGEvaluationRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        return obstetrics_engine.evaluate_fetal_ctg_trace(
+            patient_id=req.patient_id,
+            baseline_fhr_bpm=req.baseline_fhr_bpm,
+            variability_bpm=req.variability_bpm,
+            deceleration_type=req.deceleration_type or "NONE",
+            deceleration_duration_seconds=req.deceleration_duration_seconds or 0.0
+        )
+
+    @app.post("/api/v1/clinical/obstetrics/screen-teratogenicity", summary="Inviolable Gestational Teratogenicity Safety Firewall")
+    async def screen_gestational_drug_safety(
+        req: GestationalTeratogenicityRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        return obstetrics_engine.screen_gestational_teratogenicity(
+            patient_id=req.patient_id,
+            drug_name=req.drug_name,
+            is_pregnant=req.is_pregnant if req.is_pregnant is not None else True
+        )
+
+    @app.post("/api/v1/clinical/pediatrics/maintenance-fluids", summary="Precision Holliday-Segar 4-2-1 Pediatric Maintenance Fluid Engine")
+    async def calculate_pediatric_fluids(
+        req: PediatricFluidsRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        res = global_pediatric_clinical_engine.calculate_holliday_segar_maintenance(weight_kg=req.weight_kg)
+        return {
+            "weight_kg": res.weight_kg,
+            "daily_maintenance_ml": res.daily_maintenance_ml,
+            "hourly_rate_ml_per_hour": res.hourly_rate_ml_per_hour,
+            "calculation_breakdown": res.calculation_breakdown,
+            "electrolyte_sodium_meq_day": res.electrolyte_sodium_meq_day,
+            "electrolyte_potassium_meq_day": res.electrolyte_potassium_meq_day
+        }
+
+    @app.post("/api/v1/clinical/pediatrics/broselow-resuscitation", summary="Broselow Pediatric Emergency Resuscitation Tape Calculator")
+    async def calculate_broselow_emergency_profile(
+        req: BroselowResuscitationRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        res = global_pediatric_clinical_engine.evaluate_broselow_resuscitation(length_cm=req.length_cm)
+        return {
+            "color_zone": res.color_zone.value if hasattr(res.color_zone, "value") else str(res.color_zone),
+            "length_cm": res.length_cm,
+            "estimated_weight_kg": res.estimated_weight_kg,
+            "et_tube_size_uncuffed_mm": res.et_tube_size_uncuffed_mm,
+            "et_tube_size_cuffed_mm": res.et_tube_size_cuffed_mm,
+            "et_tube_depth_at_lip_cm": res.et_tube_depth_at_lip_cm,
+            "laryngoscope_blade": res.laryngoscope_blade,
+            "defibrillation_initial_joules": res.defibrillation_initial_joules,
+            "defibrillation_subsequent_joules": res.defibrillation_subsequent_joules,
+            "epinephrine_cardiac_arrest_mg": res.epinephrine_cardiac_arrest_mg,
+            "epinephrine_cardiac_arrest_ml_1_in_10k": res.epinephrine_cardiac_arrest_ml_1_in_10k,
+            "amiodarone_cardiac_arrest_mg": res.amiodarone_cardiac_arrest_mg,
+            "fluid_bolus_volume_ml": res.fluid_bolus_volume_ml,
+            "ceftriaxone_sepsis_dose_mg": res.ceftriaxone_sepsis_dose_mg,
+            "paracetamol_antipyretic_dose_mg": res.paracetamol_antipyretic_dose_mg
+        }
+
+    @app.post("/api/v1/clinical/pediatrics/hyperbilirubinemia", summary="AAP 2022 / Bhutani Neonatal Hyperbilirubinemia Nomogram")
+    async def evaluate_neonatal_hyperbilirubinemia(
+        req: HyperbilirubinemiaEvaluationRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        res = global_pediatric_clinical_engine.evaluate_aap_hyperbilirubinemia(
+            postnatal_age_hours=req.postnatal_age_hours,
+            tsb_mg_per_dl=req.tsb_mg_per_dl,
+            gestational_age_weeks=req.gestational_age_weeks,
+            has_neurotoxicity_risk=req.has_neurotoxicity_risk or False
+        )
+        return {
+            "postnatal_age_hours": res.postnatal_age_hours,
+            "total_serum_bilirubin_mg_per_dl": res.total_serum_bilirubin_mg_per_dl,
+            "gestational_age_weeks": res.gestational_age_weeks,
+            "has_neurotoxicity_risk_factors": res.has_neurotoxicity_risk_factors,
+            "phototherapy_threshold_mg_per_dl": res.phototherapy_threshold_mg_per_dl,
+            "exchange_transfusion_threshold_mg_per_dl": res.exchange_transfusion_threshold_mg_per_dl,
+            "phototherapy_indicated": res.phototherapy_indicated,
+            "exchange_transfusion_indicated": res.exchange_transfusion_indicated,
+            "urgency_recommendation": res.urgency_recommendation
+        }
+
 # Standalone Lightweight Application Shim for Environments without FastAPI Installed
 class AppShim:
     def __init__(self):
@@ -1963,6 +2175,81 @@ class AppShim:
             "clinical_notes": clinical_notes,
             "statutory_compliance": "NMC Act 2019 / Telemedicine Practice Guidelines 2020 Compliant"
         }
+
+    def evaluate_aub_figo(self, patient_id: str, patient_age: int, **kwargs) -> Dict[str, Any]:
+        res = global_gynecology_oncology_engine.evaluate_aub_figo(patient_id=patient_id, patient_age=patient_age, **kwargs)
+        return {
+            "patient_id": res.patient_id,
+            "is_structural": res.is_structural,
+            "structural_types": [t.value for t in res.structural_types],
+            "non_structural_types": [t.value for t in res.non_structural_types],
+            "leiomyoma_subclassification": res.leiomyoma_subclassification,
+            "is_red_flag_malignancy": res.is_red_flag_malignancy,
+            "mandatory_evaluations": res.mandatory_evaluations,
+            "recommended_interventions": res.recommended_interventions
+        }
+
+    def screen_coc_safety(self, patient_id: str, patient_age: int, **kwargs) -> Dict[str, Any]:
+        res = global_gynecology_oncology_engine.screen_coc_contraindications(patient_id=patient_id, patient_age=patient_age, **kwargs)
+        return {
+            "patient_id": patient_id,
+            "is_prescribing_safe": res.is_prescribing_safe,
+            "contraindication_severity": res.contraindication_severity,
+            "contraindications_detected": res.contraindications_detected,
+            "safe_alternative_contraceptives": res.safe_alternative_contraceptives
+        }
+
+    def evaluate_obstetric_ctg(self, patient_id: str, baseline_fhr_bpm: float, variability_bpm: float, **kwargs) -> Dict[str, Any]:
+        return obstetrics_engine.evaluate_fetal_ctg_trace(patient_id=patient_id, baseline_fhr_bpm=baseline_fhr_bpm, variability_bpm=variability_bpm, **kwargs)
+
+    def screen_gestational_drug_safety(self, patient_id: str, drug_name: str, is_pregnant: bool = True) -> Dict[str, Any]:
+        return obstetrics_engine.screen_gestational_teratogenicity(patient_id=patient_id, drug_name=drug_name, is_pregnant=is_pregnant)
+
+    def calculate_pediatric_fluids(self, weight_kg: float) -> Dict[str, Any]:
+        res = global_pediatric_clinical_engine.calculate_holliday_segar_maintenance(weight_kg=weight_kg)
+        return {
+            "weight_kg": res.weight_kg,
+            "daily_maintenance_ml": res.daily_maintenance_ml,
+            "hourly_rate_ml_per_hour": res.hourly_rate_ml_per_hour,
+            "calculation_breakdown": res.calculation_breakdown,
+            "electrolyte_sodium_meq_day": res.electrolyte_sodium_meq_day,
+            "electrolyte_potassium_meq_day": res.electrolyte_potassium_meq_day
+        }
+
+    def calculate_broselow_emergency_profile(self, length_cm: float) -> Dict[str, Any]:
+        res = global_pediatric_clinical_engine.evaluate_broselow_resuscitation(length_cm=length_cm)
+        return {
+            "color_zone": res.color_zone.value if hasattr(res.color_zone, "value") else str(res.color_zone),
+            "length_cm": res.length_cm,
+            "estimated_weight_kg": res.estimated_weight_kg,
+            "et_tube_size_uncuffed_mm": res.et_tube_size_uncuffed_mm,
+            "et_tube_size_cuffed_mm": res.et_tube_size_cuffed_mm,
+            "et_tube_depth_at_lip_cm": res.et_tube_depth_at_lip_cm,
+            "laryngoscope_blade": res.laryngoscope_blade,
+            "defibrillation_initial_joules": res.defibrillation_initial_joules,
+            "defibrillation_subsequent_joules": res.defibrillation_subsequent_joules,
+            "epinephrine_cardiac_arrest_mg": res.epinephrine_cardiac_arrest_mg,
+            "epinephrine_cardiac_arrest_ml_1_in_10k": res.epinephrine_cardiac_arrest_ml_1_in_10k,
+            "amiodarone_cardiac_arrest_mg": res.amiodarone_cardiac_arrest_mg,
+            "fluid_bolus_volume_ml": res.fluid_bolus_volume_ml,
+            "ceftriaxone_sepsis_dose_mg": res.ceftriaxone_sepsis_dose_mg,
+            "paracetamol_antipyretic_dose_mg": res.paracetamol_antipyretic_dose_mg
+        }
+
+    def evaluate_neonatal_hyperbilirubinemia(self, postnatal_age_hours: float, tsb_mg_per_dl: float, gestational_age_weeks: float, **kwargs) -> Dict[str, Any]:
+        res = global_pediatric_clinical_engine.evaluate_aap_hyperbilirubinemia(postnatal_age_hours=postnatal_age_hours, tsb_mg_per_dl=tsb_mg_per_dl, gestational_age_weeks=gestational_age_weeks, **kwargs)
+        return {
+            "postnatal_age_hours": res.postnatal_age_hours,
+            "total_serum_bilirubin_mg_per_dl": res.total_serum_bilirubin_mg_per_dl,
+            "gestational_age_weeks": res.gestational_age_weeks,
+            "has_neurotoxicity_risk_factors": res.has_neurotoxicity_risk_factors,
+            "phototherapy_threshold_mg_per_dl": res.phototherapy_threshold_mg_per_dl,
+            "exchange_transfusion_threshold_mg_per_dl": res.exchange_transfusion_threshold_mg_per_dl,
+            "phototherapy_indicated": res.phototherapy_indicated,
+            "exchange_transfusion_indicated": res.exchange_transfusion_indicated,
+            "urgency_recommendation": res.urgency_recommendation
+        }
+
 
 if not HAS_FASTAPI:
     app = AppShim()

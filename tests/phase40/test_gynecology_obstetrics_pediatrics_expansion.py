@@ -431,6 +431,72 @@ class TestPhase40GynecologyObstetricsPediatricsExpansion(unittest.TestCase):
             self.assertTrue(len(protocol.first_line_regimen) > 0)
             self.assertTrue(len(protocol.mandatory_baseline_labs) > 0)
 
+    # ----------------------------------------------------------------------------------------------
+    # 15. BATTLE-TESTED REAL-WORLD EDGE CASES: SAM MALNUTRITION & UNMEASURED AUB
+    # ----------------------------------------------------------------------------------------------
+
+    def test_15_sam_malnutrition_fluid_contraindication_and_unmeasured_postmenopausal_aub(self):
+        """Verifies fatal SAM fluid overload prevention and postmenopausal AUB pre-TVS malignancy vigilance."""
+        # Case A: Child with Severe Acute Malnutrition (SAM) presenting with severe dehydration
+        res_sam = self.ped_engine.calculate_who_dehydration_plan_c(
+            weight_kg=9.0,
+            age_months=18,
+            has_severe_acute_malnutrition=True
+        )
+        self.assertTrue(res_sam["is_standard_plan_c_contraindicated"])
+        self.assertEqual(res_sam["protocol"], "WHO_SAM_DEHYDRATION_CONTRAINDICATION")
+        self.assertEqual(res_sam["total_fluid_ml"], 0.0)
+        self.assertIn("ReSoMal", res_sam["recommended_resuscitation"])
+
+        # Case B: 55-year-old postmenopausal woman with bleeding but TVS not yet performed (ET is None)
+        res_aub = self.gyn_engine.evaluate_aub_figo(
+            patient_id="PAT-PMB-001",
+            patient_age=55,
+            endometrial_thickness_mm=None
+        )
+        self.assertTrue(res_aub.is_red_flag_malignancy)
+        self.assertTrue(any("Immediate Transvaginal Ultrasound" in e for e in res_aub.mandatory_evaluations))
+
+    # ----------------------------------------------------------------------------------------------
+    # 16. REST API & APPSHIM PHASE 40 ENDPOINT PARITY VERIFICATION
+    # ----------------------------------------------------------------------------------------------
+
+    def test_16_fastapi_and_appshim_phase40_endpoints(self):
+        """Verifies that main.py and AppShim provide full REST/shim coverage for Phase 40."""
+        import main
+
+        # Test AppShim methods
+        shim = main.AppShim()
+
+        # 1. AUB Evaluation
+        aub = shim.evaluate_aub_figo("PAT-SHIM-01", 52, endometrial_thickness_mm=6.0)
+        self.assertTrue(aub["is_red_flag_malignancy"])
+
+        # 2. COC Safety
+        coc = shim.screen_coc_safety("PAT-SHIM-02", 36, cigarettes_per_day=20)
+        self.assertFalse(coc["is_prescribing_safe"])
+
+        # 3. Obstetric CTG
+        ctg = shim.evaluate_obstetric_ctg("PAT-SHIM-03", baseline_fhr_bpm=70.0, variability_bpm=2.0, deceleration_type="PROLONGED", deceleration_duration_seconds=200.0)
+        self.assertEqual(ctg["category"], "PATHOLOGICAL_CATEGORY_III")
+
+        # 4. Teratogenicity Screen
+        terato = shim.screen_gestational_drug_safety("PAT-SHIM-04", "Methotrexate 15mg", is_pregnant=True)
+        self.assertTrue(terato["prescribing_blocked"])
+
+        # 5. Pediatric Maintenance Fluids
+        fluids = shim.calculate_pediatric_fluids(weight_kg=12.0)
+        self.assertEqual(fluids["daily_maintenance_ml"], 1100.0)
+
+        # 6. Broselow Tape
+        broselow = shim.calculate_broselow_emergency_profile(length_cm=65.0)
+        self.assertIn("PINK", broselow["color_zone"])
+
+        # 7. Neonatal Hyperbilirubinemia
+        bili = shim.evaluate_neonatal_hyperbilirubinemia(postnatal_age_hours=48.0, tsb_mg_per_dl=18.0, gestational_age_weeks=39.0)
+        self.assertTrue(bili["phototherapy_indicated"])
+
 
 if __name__ == "__main__":
     unittest.main()
+

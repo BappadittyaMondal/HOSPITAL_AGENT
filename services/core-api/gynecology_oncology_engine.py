@@ -175,6 +175,10 @@ class GynecologyOncologyEngine:
                 is_red_flag = True
                 evals.append("URGENT: Pipelle Endometrial Aspiration Biopsy / Hysteroscopic D&C (ET > 4mm in postmenopausal patient)")
                 interventions.append("Rule out Endometrial Carcinoma prior to any hormonal therapy")
+            elif endometrial_thickness_mm is None:
+                is_red_flag = True
+                evals.append("URGENT: Immediate Transvaginal Ultrasound (TVS) mandatory to evaluate endometrial thickness; if ET > 4mm, biopsy required")
+                interventions.append("Rule out Endometrial Carcinoma prior to any hormonal therapy (imaging pending)")
 
         if AUBStructuralCategory.POLYP in structs:
             evals.append("Saline Infusion Sonohysterography (SIS) or Diagnostic Hysteroscopy")

@@ -158,7 +158,8 @@ class PediatricClinicalEngine:
     def calculate_who_dehydration_plan_c(
         self,
         weight_kg: float,
-        age_months: int
+        age_months: int,
+        has_severe_acute_malnutrition: bool = False
     ) -> Dict[str, Any]:
         """
         WHO Plan C: Severe Dehydration Fluid Resuscitation Protocol.
@@ -169,7 +170,24 @@ class PediatricClinicalEngine:
         If Age >= 12 months:
           - Step 1: 30 mL/kg in 30 minutes.
           - Step 2: 70 mL/kg in 2.5 hours.
+        SAFETY ENFORCEMENT: Standard rapid IV Plan C is strictly CONTRAINDICATED in Severe Acute Malnutrition (SAM).
         """
+        if has_severe_acute_malnutrition:
+            return {
+                "weight_kg": weight_kg,
+                "age_months": age_months,
+                "has_severe_acute_malnutrition": True,
+                "is_standard_plan_c_contraindicated": True,
+                "protocol": "WHO_SAM_DEHYDRATION_CONTRAINDICATION",
+                "danger_warning": "CRITICAL: Standard rapid IV Plan C is CONTRAINDICATED in Severe Acute Malnutrition (SAM). High sodium and rapid expansion precipitate fatal congestive cardiac failure.",
+                "recommended_resuscitation": "Oral or Nasogastric Rehydration Solution for Malnutrition (ReSoMal): 5 mL/kg every 30 minutes for first 2 hours, then 5-10 mL/kg/hour alternate hours. If in hypovolemic/septic shock, administer slow IV 15 mL/kg over 1 hour with half-strength Darrow's or Ringer's + 5% dextrose under continuous cardiac monitoring.",
+                "total_fluid_ml": 0.0,
+                "step_1_bolus": {"volume_ml": 0.0, "duration": "N/A - CONTRAINDICATED", "rate_ml_hr": 0.0},
+                "step_2_maintenance": {"volume_ml": 0.0, "duration": "N/A - CONTRAINDICATED", "rate_ml_hr": 0.0},
+                "total_rehydration_time": "Specialized SAM Protocol",
+                "monitoring_instructions": "Monitor heart rate, respiratory rate, liver size, and signs of fluid overload every 10-15 minutes."
+            }
+
         total_fluid_ml = round(weight_kg * 100.0, 1)
         bolus_step1_ml = round(weight_kg * 30.0, 1)
         subsequent_step2_ml = round(weight_kg * 70.0, 1)
@@ -188,6 +206,8 @@ class PediatricClinicalEngine:
         return {
             "weight_kg": weight_kg,
             "age_months": age_months,
+            "has_severe_acute_malnutrition": False,
+            "is_standard_plan_c_contraindicated": False,
             "protocol": "WHO_PLAN_C_SEVERE_DEHYDRATION",
             "fluid_type": "IV Ringer's Lactate (preferred) or Normal Saline 0.9%",
             "total_fluid_ml": total_fluid_ml,
