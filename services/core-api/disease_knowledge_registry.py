@@ -835,6 +835,72 @@ DISEASE_REGISTRY: Dict[str, DiseaseEntity] = {
         },
         mandatory_rule_outs=["ACUTE_INTESTINAL_OBSTRUCTION"],
         recommended_investigations=["Ultrasound Abdomen (Target sign)", "Pneumatic/Hydrostatic Reduction"]
+    ),
+    "PRE_ECLAMPSIA_WITH_SEVERE_FEATURES": DiseaseEntity(
+        disease_key="PRE_ECLAMPSIA_WITH_SEVERE_FEATURES",
+        name="Pre-eclampsia with Severe Features & HELLP Syndrome",
+        snomed_id="398254007",
+        icd11_id="JA23",
+        category="OBSTETRIC_GYNECOLOGICAL",
+        base_prior_probability=0.03,
+        is_red_flag_emergency=True,
+        features={
+            "38341003": (0.95, 0.85),   # Severe blood pressure >= 160/110 mmHg
+            "25064002": (0.80, 0.70),   # Persistent severe headache or visual scotomata
+            "21522001": (0.70, 0.85),   # Epigastric / right upper quadrant pain
+            "105000003": (0.85, 0.95),  # Elevated AST/ALT >= 2x normal and LDH >= 600
+            "422768005": (0.90, 0.95),  # Severe thrombocytopenia < 100,000/uL
+        },
+        mandatory_rule_outs=["ECLAMPSIA"],
+        recommended_investigations=["Platelet Count", "Serum AST/ALT & LDH", "Urine Protein:Creatinine Ratio", "Fetal Ultrasound & CTG", "IV Magnesium Sulfate"]
+    ),
+    "POLYCYSTIC_OVARY_SYNDROME": DiseaseEntity(
+        disease_key="POLYCYSTIC_OVARY_SYNDROME",
+        name="Polycystic Ovary Syndrome (PCOS)",
+        snomed_id="237055002",
+        icd11_id="5A80.1",
+        category="OBSTETRIC_GYNECOLOGICAL",
+        base_prior_probability=0.08,
+        is_red_flag_emergency=False,
+        features={
+            "271594007": (0.85, 0.75),  # Oligomenorrhea or amenorrhea (cycle > 35 days)
+            "247441003": (0.75, 0.80),  # Hirsutism (Ferriman-Gallwey >= 8) or cystic acne
+            "168537006": (0.80, 0.90),  # Polycystic ovarian morphology on TVS (>= 20 follicles)
+        },
+        mandatory_rule_outs=["OVARIAN_TORSION"],
+        recommended_investigations=["Pelvic Ultrasound", "Fasting Glucose & Lipid Profile", "Serum TSH", "Serum Prolactin", "Total/Free Testosterone"]
+    ),
+    "PEDIATRIC_STATUS_ASTHMATICUS": DiseaseEntity(
+        disease_key="PEDIATRIC_STATUS_ASTHMATICUS",
+        name="Pediatric Status Asthmaticus / Acute Severe Wheeze",
+        snomed_id="233678006",
+        icd11_id="CA23.3",
+        category="PEDIATRIC",
+        base_prior_probability=0.04,
+        is_red_flag_emergency=True,
+        features={
+            "267036007": (0.95, 0.70),  # Severe dyspnea, intercostal retractions, grunting
+            "422768005": (0.85, 0.85),  # Silent chest or pulsus paradoxus in pediatric patient
+            "14140009": (0.70, 0.80),   # SpO2 < 92% on room air, inability to speak/feed
+        },
+        mandatory_rule_outs=["ANAPHYLAXIS", "ACUTE_SEVERE_ASTHMA"],
+        recommended_investigations=["Continuous SpO2", "Inhaled Salbutamol + Ipratropium", "IV Hydrocortisone", "IV Magnesium Sulfate"]
+    ),
+    "PEDIATRIC_DIARRHEA_SEVERE_DEHYDRATION": DiseaseEntity(
+        disease_key="PEDIATRIC_DIARRHEA_SEVERE_DEHYDRATION",
+        name="Pediatric Acute Gastroenteritis with Severe Dehydration",
+        snomed_id="235871003",
+        icd11_id="1A40",
+        category="PEDIATRIC",
+        base_prior_probability=0.06,
+        is_red_flag_emergency=True,
+        features={
+            "28539006": (0.90, 0.70),   # Watery diarrhea >= 3 stools/day and vomiting
+            "84757009": (0.95, 0.85),   # Lethargic or unconscious child
+            "247441003": (0.90, 0.90),  # Sunken eyes, skin pinch goes back very slowly (> 2s)
+        },
+        mandatory_rule_outs=["INTUSSUSCEPTION", "SEPTIC_SHOCK"],
+        recommended_investigations=["WHO Plan C IV Ringer's Lactate (100 mL/kg)", "Serum Electrolytes", "Capillary Blood Glucose", "Oral Zinc Solution"]
     )
 }
 

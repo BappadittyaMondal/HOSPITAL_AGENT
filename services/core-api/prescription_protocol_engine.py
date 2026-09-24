@@ -978,6 +978,83 @@ STG_PROTOCOL_CATALOG: Dict[str, ClinicalSTGProtocol] = {
         therapeutic_monitoring=["Continuous cardiac rhythm telemetry with defibrillation pads in place", "Blood pressure every 2-5 minutes"],
         urgent_interventions=["IF PULSELESS VENTRICULAR TACHYCARDIA: IMMEDIATE DEFIBRILLATION (200 J biphasic unsynchronized) + CPR (ACLS protocol)", "IF UNSTABLE VT WITH PULSE (hypotension, altered sensorium, pulmonary edema, angina): IMMEDIATE SYNCHRONIZED CARDIOVERSION (100 J biphasic)", "Correct hypokalemia (target K+ > 4.0 mEq/L) and hypomagnesemia (target Mg2+ > 2.0 mg/dL)"],
         clinical_pearls="Never administer Verapamil, Diltiazem, or Adenosine to an undifferentiated wide-complex tachycardia — in 80% of cases the rhythm is VT, and calcium channel blockers cause immediate cardiovascular collapse."
+    ),
+
+    "PRE_ECLAMPSIA_WITH_SEVERE_FEATURES": ClinicalSTGProtocol(
+        disease_key="PRE_ECLAMPSIA_WITH_SEVERE_FEATURES",
+        disease_name="Pre-eclampsia with Severe Features / Impending Eclampsia",
+        category="OBSTETRIC_GYNECOLOGICAL",
+        first_line_regimen=[
+            PrescriptionItem("Magnesium Sulfate", "4g", 50.0, "4000mg", "IV", "STAT", 1, "4g IV loading dose in 100mL over 20 min, followed by 1g/hour continuous IV maintenance"),
+            PrescriptionItem("Labetalol", "20mg", None, None, "IV", "STAT", 1, "20mg IV bolus over 2 min; repeat 40mg then 80mg q10min up to 220mg max for SBP >= 160 or DBP >= 110"),
+            PrescriptionItem("Nifedipine", "10mg", None, None, "ORAL", "PRN", 1, "10mg orally if IV access delayed; repeat in 30 min if SBP >= 160 or DBP >= 110")
+        ],
+        alternative_regimen=[
+            PrescriptionItem("Hydralazine", "5mg", None, None, "IV", "STAT", 1, "5mg IV slowly over 1-2 min; repeat 5-10mg q20-30min up to 20mg max"),
+            PrescriptionItem("Methyldopa", "500mg", None, None, "ORAL", "TDS", 7, "500mg oral maintenance for step-down control")
+        ],
+        mandatory_baseline_labs=["Complete Blood Count with Platelets", "Serum Creatinine", "AST / ALT / LDH", "Urine Protein:Creatinine Ratio", "Fetal Cardiotocography (CTG)"],
+        therapeutic_monitoring=["Hourly deep tendon patellar reflex (withhold MgSO4 if absent)", "Hourly respiratory rate (must be >= 16/min)", "Strict hourly urine output via Foley catheter (must be >= 30 mL/hr)"],
+        urgent_interventions=["Keep bedside 10% IV Calcium Gluconate (10 mL) immediately available as Magnesium toxicity antidote", "Expedite maternal stabilization and obstetric delivery evaluation", "Insert wide-bore IV line and Foley catheter with urometer"],
+        clinical_pearls="Never administer ACE Inhibitors or ARBs (severe fetopathy). Delivery of the placenta is the only definitive cure for pre-eclampsia."
+    ),
+
+    "POLYCYSTIC_OVARY_SYNDROME": ClinicalSTGProtocol(
+        disease_key="POLYCYSTIC_OVARY_SYNDROME",
+        disease_name="Polycystic Ovary Syndrome (PCOS) - Metabolic & Ovulatory Management",
+        category="OBSTETRIC_GYNECOLOGICAL",
+        first_line_regimen=[
+            PrescriptionItem("Metformin", "500mg", None, None, "ORAL", "BD", 90, "Titrate to 1000mg BD after 2 weeks with meals for insulin sensitization"),
+            PrescriptionItem("Ethinylestradiol + Cyproterone acetate", "0.035mg/2mg", None, None, "ORAL", "OD", 84, "21 days on, 7 days off for cycle regulation and clinical hyperandrogenism control"),
+            PrescriptionItem("Medroxyprogesterone acetate", "10mg", None, None, "ORAL", "OD", 14, "10mg daily for 12-14 days every 2-3 months for endometrial protection if OCP contraindicated")
+        ],
+        alternative_regimen=[
+            PrescriptionItem("Spironolactone", "50mg", None, None, "ORAL", "OD", 90, "50-100mg daily for persistent hirsutism (strict barrier contraception mandatory)"),
+            PrescriptionItem("Inositol", "2g", None, None, "ORAL", "BD", 90, "Myo-inositol 2g + D-chiro-inositol 50mg BD for metabolic support")
+        ],
+        mandatory_baseline_labs=["Fasting Plasma Glucose & 2-Hour 75g OGTT", "Fasting Lipid Profile", "Serum TSH & Prolactin", "Total & Free Testosterone", "Pelvic Ultrasound"],
+        therapeutic_monitoring=["BMI and waist circumference quarterly", "Annual screening for Type 2 Diabetes and dyslipidemia"],
+        urgent_interventions=["Prescribe mandatory barrier contraception if Spironolactone is used due to feminization risk in male fetus", "Dietary lifestyle counseling targeting 5-10% weight reduction"],
+        clinical_pearls="Screen for endometrial hyperplasia in any PCOS patient with amenorrhea > 3 months."
+    ),
+
+    "PEDIATRIC_STATUS_ASTHMATICUS": ClinicalSTGProtocol(
+        disease_key="PEDIATRIC_STATUS_ASTHMATICUS",
+        disease_name="Pediatric Status Asthmaticus / Severe Acute Wheezing Attack",
+        category="PEDIATRIC",
+        first_line_regimen=[
+            PrescriptionItem("Salbutamol", "2.5mg", 0.15, "5.0mg", "INHALATION", "STAT", 1, "2.5-5.0 mg nebulized with 100% Oxygen every 20 min for 3 doses (or continuous 0.5 mg/kg/hr)"),
+            PrescriptionItem("Ipratropium Bromide", "250mcg", 0.05, "500mcg", "INHALATION", "STAT", 1, "250 mcg nebulized mixed with Salbutamol every 20 min for 3 doses in first hour"),
+            PrescriptionItem("Hydrocortisone", "100mg", 4.0, "200mg", "IV", "STAT", 1, "4 mg/kg IV stat, followed by 2 mg/kg q6h; switch to oral prednisolone when tolerated"),
+            PrescriptionItem("Magnesium Sulfate", "1g", 50.0, "2000mg", "IV", "STAT", 1, "50 mg/kg IV in 100 mL Normal Saline over 20 min for severe refractory bronchospasm")
+        ],
+        alternative_regimen=[
+            PrescriptionItem("Prednisolone", "20mg", 1.0, "40mg/day", "ORAL", "OD", 5, "1-2 mg/kg oral solution once daily for 3-5 days"),
+            PrescriptionItem("Aminophylline", "50mg", 5.0, "250mg", "IV", "STAT", 1, "5 mg/kg IV loading dose over 20 min with ECG monitoring if ICU admitted")
+        ],
+        mandatory_baseline_labs=["Continuous Pulse Oximetry (SpO2)", "Peak Expiratory Flow (PEFR if age > 5)", "Blood Gas (Capillary / Venous / Arterial) for CO2 retention", "Chest X-Ray to rule out pneumothorax or foreign body"],
+        therapeutic_monitoring=["Continuous SpO2 (target 94-98%)", "Respiratory rate, sternocleidomastoid retractions, and silent chest signs every 15 min"],
+        urgent_interventions=["High-flow humidified Oxygen via face mask with reservoir", "Immediate Pediatric ICU consult for Non-Invasive Ventilation (BiPAP) or ketamine bronchodilation if tiring"],
+        clinical_pearls="A 'silent chest' with no audible wheeze in a severe dyspneic child indicates near-fatal airflow limitation requiring immediate resuscitation."
+    ),
+
+    "PEDIATRIC_DIARRHEA_SEVERE_DEHYDRATION": ClinicalSTGProtocol(
+        disease_key="PEDIATRIC_DIARRHEA_SEVERE_DEHYDRATION",
+        disease_name="Pediatric Acute Diarrheal Disease with Severe Dehydration (WHO Plan C)",
+        category="PEDIATRIC",
+        first_line_regimen=[
+            PrescriptionItem("Ringer Lactate", "500ml", 100.0, "2000ml", "IV", "STAT", 1, "WHO Plan C: 100 mL/kg IV. Age <1y: 30 mL/kg in 1h, then 70 mL/kg in 5h. Age >=1y: 30 mL/kg in 30min, then 70 mL/kg in 2.5h"),
+            PrescriptionItem("Zinc Sulfate", "20mg", 20.0, "20mg/day", "ORAL", "OD", 14, "20mg daily for 14 days (10mg if age < 6 months) to reduce diarrheal duration and relapse"),
+            PrescriptionItem("Oral Rehydration Salts (ORS)", "1 sachet", None, None, "ORAL", "PRN", 5, "5 mL/kg/hour as soon as child can drink orally alongside IV therapy")
+        ],
+        alternative_regimen=[
+            PrescriptionItem("Normal Saline 0.9%", "500ml", 100.0, "2000ml", "IV", "STAT", 1, "Alternative crystalloid if Ringer Lactate unavailable"),
+            PrescriptionItem("Ceftriaxone", "500mg", 50.0, "1000mg", "IV", "OD", 3, "Only if bloody diarrhea (shigellosis) with systemic toxicity")
+        ],
+        mandatory_baseline_labs=["Serum Electrolytes (Sodium, Potassium, Bicarbonate)", "Blood Urea & Serum Creatinine", "Capillary Blood Glucose (rule out hypoglycemia)", "Stool Routine & Microscopy"],
+        therapeutic_monitoring=["Reassess radial pulse and fontanelle every 15-30 minutes until strong pulse returns", "Monitor skin pinch and consciousness level hourly"],
+        urgent_interventions=["If peripheral IV access fails twice within 90 seconds in shock, establish emergency Intraosseous (IO) access in proximal tibia", "Check and correct hypoglycemia with 5 mL/kg 10% Dextrose bolus"],
+        clinical_pearls="Never administer antimotility agents (Loperamide) or antiemetic metoclopramide to young children — risk of paralytic ileus and fatal extrapyramidal crisis."
     )
 }
 
