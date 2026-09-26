@@ -430,6 +430,59 @@ class PertinentNegativesEngine:
         results.sort(key=lambda x: x["posterior_probability"], reverse=True)
         return results
 
+    def evaluate_differential_with_ood_gate(
+        self,
+        present_snomed_ids: Set[str],
+        absent_snomed_ids: Set[str],
+        min_posterior_threshold: float = 0.35,
+        min_feature_matches: int = 1
+    ) -> Dict[str, Any]:
+        """
+        Evaluates clinical differential incorporating Pertinent Negatives and
+        an explicit Out-of-Distribution (OOD) Abstention Gate.
+        """
+        diff = self.evaluate_differential(present_snomed_ids, absent_snomed_ids)
+        top_match = diff[0] if diff else None
+        
+        is_empty_findings = len(present_snomed_ids) == 0
+        has_zero_matches = True
+        for d in diff:
+            pos_matches = [f for f in d.get("applied_findings", []) if f.get("status") == "PRESENT"]
+            if len(pos_matches) >= min_feature_matches:
+                has_zero_matches = False
+                break
+                
+        top_prob = top_match["posterior_probability"] if top_match else 0.0
+        is_below_confidence = top_prob < min_posterior_threshold
+        
+        if is_empty_findings or has_zero_matches or is_below_confidence:
+            ood_triggered = True
+            status = "OUT_OF_DISTRIBUTION_PATHOLOGY_UNRECOGNIZED_MANDATORY_SPECIALIST_REFERRAL"
+            confidence = "LOW_CONFIDENCE_UNINDEXED_PATHOLOGY"
+            advisory = (
+                "STATUTORY SAFETY ADVISORY: The patient's clinical presentation does not "
+                "statistically correlate with any recognized condition in the active DAG. "
+                "Automated recommendation is withheld to prevent lethal misdiagnosis. "
+                "Immediate senior clinical consultation and out-of-distribution referral are required."
+            )
+        else:
+            ood_triggered = False
+            status = "IN_DISTRIBUTION_DIAGNOSTIC_CONSIDERATION"
+            confidence = "HIGH_CONFIDENCE" if top_prob >= 0.70 else "MODERATE_CONFIDENCE"
+            advisory = "CLINICAL DECISION SUPPORT: Draft differential requiring RMP correlation."
+            
+        return {
+            "ood_abstention_triggered": ood_triggered,
+            "diagnostic_status": status,
+            "confidence_level": confidence,
+            "top_match_disease_key": top_match["disease_key"] if top_match and not ood_triggered else None,
+            "top_match_posterior_probability": top_prob,
+            "findings_evaluated_count": len(present_snomed_ids) + len(absent_snomed_ids),
+            "safety_advisory": advisory,
+            "differential_ranked": diff
+        }
+
+
 
 # --------------------------------------------------------------------------------------------------
 # 3. MUST-NOT-MISS COGNITIVE DE-BIASING MATRIX

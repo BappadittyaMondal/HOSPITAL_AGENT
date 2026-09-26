@@ -288,6 +288,13 @@ if HAS_FASTAPI:
         present_snomed_ids: List[str]
         absent_snomed_ids: Optional[List[str]] = []
         category_filter: Optional[str] = None
+        patient_id: Optional[str] = None
+        enable_ood_gate: Optional[bool] = True
+        min_posterior_threshold: Optional[float] = 0.35
+
+    class PolypharmacyCheckRequest(BaseModel):
+        drugs: List[str]
+        patient_id: Optional[str] = None
 
     class FormularyScreenRequest(BaseModel):
         drugs_prescribed: List[str]
@@ -1151,15 +1158,71 @@ if HAS_FASTAPI:
         req: ClinicalDifferentialRequest,
         principal: Dict[str, Any] = Depends(get_current_principal)
     ):
-        diff = global_disease_registry_engine.evaluate_case(
-            present_snomed_ids=set(req.present_snomed_ids),
-            absent_snomed_ids=set(req.absent_snomed_ids or []),
-            category_filter=req.category_filter
-        )
-        return {
-            "evaluated_findings_count": len(req.present_snomed_ids) + len(req.absent_snomed_ids or []),
-            "differential_ranked": diff[:15]
-        }
+        present_ids = set(req.present_snomed_ids)
+        absent_ids = set(req.absent_snomed_ids or [])
+        hydrated_context = None
+
+        if req.patient_id and global_patient_persistence_store:
+            rec = global_patient_persistence_store.get_longitudinal_record(req.patient_id)
+            if rec:
+                hydrated_chronic_problems = []
+                for p in (rec.get("chronic_problem_list") or rec.get("active_problems") or []):
+                    snomed = p.get("condition_snomed")
+                    if snomed and snomed != "UNKNOWN":
+                        present_ids.add(snomed)
+                        hydrated_chronic_problems.append(p.get("diagnosis_name"))
+                hydrated_context = {
+                    "patient_id": req.patient_id,
+                    "hydrated_allergies_count": len(rec.get("allergies", [])),
+                    "hydrated_active_meds_count": len(rec.get("active_medications", [])),
+                    "hydrated_chronic_problems": hydrated_chronic_problems
+                }
+
+        if req.enable_ood_gate:
+            res = global_disease_registry_engine.evaluate_case_with_ood_gate(
+                present_snomed_ids=present_ids,
+                absent_snomed_ids=absent_ids,
+                category_filter=req.category_filter,
+                min_posterior_threshold=req.min_posterior_threshold or 0.35
+            )
+            return {
+                "evaluated_findings_count": len(present_ids) + len(absent_ids),
+                "ood_abstention_triggered": res["ood_abstention_triggered"],
+                "diagnostic_status": res["diagnostic_status"],
+                "confidence_level": res["confidence_level"],
+                "top_match_disease_key": res["top_match_disease_key"],
+                "top_match_posterior_probability": res["top_match_posterior_probability"],
+                "safety_advisory": res["safety_advisory"],
+                "hydrated_patient_context": hydrated_context,
+                "differential_ranked": res["differential_ranked"][:15]
+            }
+        else:
+            diff = global_disease_registry_engine.evaluate_case(
+                present_snomed_ids=present_ids,
+                absent_snomed_ids=absent_ids,
+                category_filter=req.category_filter
+            )
+            return {
+                "evaluated_findings_count": len(present_ids) + len(absent_ids),
+                "hydrated_patient_context": hydrated_context,
+                "differential_ranked": diff[:15]
+            }
+
+    @app.post("/api/v1/clinical/cpoe/check-polypharmacy", summary="Combinatorial N-Way Polypharmacy & Triple Whammy Surveillance")
+    async def check_cpoe_polypharmacy(
+        req: PolypharmacyCheckRequest,
+        principal: Dict[str, Any] = Depends(get_current_principal)
+    ):
+        combined_drugs = list(req.drugs)
+        if req.patient_id and global_patient_persistence_store:
+            rec = global_patient_persistence_store.get_longitudinal_record(req.patient_id)
+            if rec:
+                for m in rec.get("active_medications", []):
+                    m_name = m.get("drug_name")
+                    if m_name and m_name not in combined_drugs:
+                        combined_drugs.append(m_name)
+        return dre_engine.check_combinatorial_polypharmacy_risks(combined_drugs)
+
 
     @app.post("/api/v1/clinical/formulary/screen-order", summary="NLEM 2022 Comprehensive 500+ DDI & Teratogenicity Screen")
     async def screen_formulary_order(
@@ -2249,6 +2312,77 @@ class AppShim:
             "exchange_transfusion_indicated": res.exchange_transfusion_indicated,
             "urgency_recommendation": res.urgency_recommendation
         }
+
+    def evaluate_clinical_differential(
+        self,
+        present_snomed_ids: List[str],
+        absent_snomed_ids: Optional[List[str]] = None,
+        category_filter: Optional[str] = None,
+        patient_id: Optional[str] = None,
+        enable_ood_gate: bool = True,
+        min_posterior_threshold: float = 0.35
+    ) -> Dict[str, Any]:
+        present_ids = set(present_snomed_ids)
+        absent_ids = set(absent_snomed_ids or [])
+        hydrated_context = None
+
+        if patient_id and global_patient_persistence_store:
+            rec = global_patient_persistence_store.get_longitudinal_record(patient_id)
+            if rec:
+                hydrated_chronic_problems = []
+                for p in (rec.get("chronic_problem_list") or rec.get("active_problems") or []):
+                    snomed = p.get("condition_snomed")
+                    if snomed and snomed != "UNKNOWN":
+                        present_ids.add(snomed)
+                        hydrated_chronic_problems.append(p.get("diagnosis_name"))
+                hydrated_context = {
+                    "patient_id": patient_id,
+                    "hydrated_allergies_count": len(rec.get("allergies", [])),
+                    "hydrated_active_meds_count": len(rec.get("active_medications", [])),
+                    "hydrated_chronic_problems": hydrated_chronic_problems
+                }
+
+        if enable_ood_gate:
+            res = global_disease_registry_engine.evaluate_case_with_ood_gate(
+                present_snomed_ids=present_ids,
+                absent_snomed_ids=absent_ids,
+                category_filter=category_filter,
+                min_posterior_threshold=min_posterior_threshold
+            )
+            return {
+                "evaluated_findings_count": len(present_ids) + len(absent_ids),
+                "ood_abstention_triggered": res["ood_abstention_triggered"],
+                "diagnostic_status": res["diagnostic_status"],
+                "confidence_level": res["confidence_level"],
+                "top_match_disease_key": res["top_match_disease_key"],
+                "top_match_posterior_probability": res["top_match_posterior_probability"],
+                "safety_advisory": res["safety_advisory"],
+                "hydrated_patient_context": hydrated_context,
+                "differential_ranked": res["differential_ranked"][:15]
+            }
+        else:
+            diff = global_disease_registry_engine.evaluate_case(
+                present_snomed_ids=present_ids,
+                absent_snomed_ids=absent_ids,
+                category_filter=category_filter
+            )
+            return {
+                "evaluated_findings_count": len(present_ids) + len(absent_ids),
+                "hydrated_patient_context": hydrated_context,
+                "differential_ranked": diff[:15]
+            }
+
+    def check_polypharmacy_risks(self, drugs: List[str], patient_id: Optional[str] = None) -> Dict[str, Any]:
+        combined_drugs = list(drugs)
+        if patient_id and global_patient_persistence_store:
+            rec = global_patient_persistence_store.get_longitudinal_record(patient_id)
+            if rec:
+                for m in rec.get("active_medications", []):
+                    m_name = m.get("drug_name")
+                    if m_name and m_name not in combined_drugs:
+                        combined_drugs.append(m_name)
+        return dre_engine.check_combinatorial_polypharmacy_risks(combined_drugs)
+
 
 
 if not HAS_FASTAPI:

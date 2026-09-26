@@ -344,6 +344,45 @@ class CPOEDREEngine:
                     f"APPROACHING TOXICITY CEILING: {drug_name} lifetime total is at {new_total:.1f}/{max_allowed}."
                 )
 
+        # 7. Combinatorial Polypharmacy Safety Checks (Triple Whammy & Additive QTc)
+        # Triple Whammy: ACEi/ARB + Diuretic + NSAID (Precipitates Acute Renal Failure)
+        acei_arb_list = ["ramipril", "enalapril", "lisinopril", "losartan", "telmisartan", "valsartan", "candesartan", "irbesartan", "olmesartan"]
+        diuretic_list = ["furosemide", "torsemide", "hydrochlorothiazide", "chlorthalidone", "indapamide", "spironolactone", "eplerenone", "bumetanide"]
+        nsaid_list = ["ibuprofen", "diclofenac", "naproxen", "ketorolac", "indomethacin", "piroxicam", "meloxicam", "mefenamic acid", "etoricoxib", "celecoxib"]
+
+        all_regimen_drugs = [drug_lower] + meds_lower
+        has_acei = any(any(a in d for a in acei_arb_list) for d in all_regimen_drugs)
+        has_diuretic = any(any(di in d for di in diuretic_list) for d in all_regimen_drugs)
+        has_nsaid = any(any(n in d for n in nsaid_list) for d in all_regimen_drugs)
+
+        if has_acei and has_diuretic and has_nsaid:
+            hard_stops.append(
+                "COMBINATORIAL TRIPLE WHAMMY: ACEi/ARB + Diuretic + NSAID combination precipitates "
+                "catastrophic Acute Kidney Injury and severe hyperkalemia. Avoid combination or substitute non-NSAID analgesia."
+            )
+
+        # Additive QTc Multi-Drug Surveillance
+        qt_agents = ["amiodarone", "sotalol", "haloperidol", "ondansetron", "methadone", "ciprofloxacin", "levofloxacin", "moxifloxacin", "azithromycin", "clarithromycin", "fluconazole", "quetiapine"]
+        detected_qt = set()
+        for q in qt_agents:
+            for d in all_regimen_drugs:
+                if q in d:
+                    detected_qt.add(q)
+        if len(detected_qt) >= 2:
+            warnings.append(
+                f"POLYPHARMACY ADDITIVE QTC RISK: Co-administration of multiple QT-prolonging agents ({', '.join(sorted(detected_qt))}) "
+                "significantly increases risk of Torsades de Pointes and fatal ventricular tachycardia. Continuous ECG telemetry mandatory."
+            )
+
+        # 8. Unspecified Allergy Safeguard (Elimination of Silent Defaults)
+        is_allergy_unspecified = any(u in a for a in allergies_lower for u in ["unspecified", "unknown", "pending", "missing"])
+        high_risk_immunogenic = ["amoxicillin", "ampicillin", "penicillin", "piperacillin", "ceftriaxone", "cefazolin", "cefotaxime", "sulfamethoxazole", "cotrimoxazole", "ciprofloxacin"]
+        if is_allergy_unspecified and any(h in drug_lower for h in high_risk_immunogenic):
+            warnings.append(
+                f"UNSPECIFIED_ALLERGY_HIGH_RISK_MEDICATION: Allergy status is recorded as unspecified/missing. "
+                f"Active clinical allergy interview mandatory prior to administering {drug_name}."
+            )
+
         # Phase 33 S-02: Deep NLEM Formulary & Combinatorial DDI screening
         if global_nlem_formulary_engine is not None:
             try:
@@ -373,4 +412,61 @@ class CPOEDREEngine:
             "warnings": warnings,
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
+
+    def check_combinatorial_polypharmacy_risks(self, all_drugs: List[str]) -> Dict[str, Any]:
+        """
+        Evaluates N-way polypharmacy combinatorial interactions across the entire drug regimen.
+        Identifies multi-drug synergistic toxicities that escape pairwise 2-drug lookups.
+        """
+        drugs_lower = [d.lower().strip() for d in all_drugs]
+        for d in all_drugs:
+            norm = normalize_drug_name(d)
+            if norm and norm not in drugs_lower:
+                drugs_lower.append(norm)
+
+        detected_risks = []
+        is_blocked = False
+
+        # 1. Triple Whammy: ACEi/ARB + Diuretic + NSAID
+        acei_arb_list = ["ramipril", "enalapril", "lisinopril", "losartan", "telmisartan", "valsartan", "candesartan", "irbesartan", "olmesartan"]
+        diuretic_list = ["furosemide", "torsemide", "hydrochlorothiazide", "chlorthalidone", "indapamide", "spironolactone", "eplerenone", "bumetanide"]
+        nsaid_list = ["ibuprofen", "diclofenac", "naproxen", "ketorolac", "indomethacin", "piroxicam", "meloxicam", "mefenamic acid", "etoricoxib", "celecoxib", "aspirin"]
+
+        has_acei = any(any(a in d for a in acei_arb_list) for d in drugs_lower)
+        has_diuretic = any(any(di in d for di in diuretic_list) for d in drugs_lower)
+        has_nsaid = any(any(n in d for n in nsaid_list) for d in drugs_lower)
+
+        if has_acei and has_diuretic and has_nsaid:
+            is_blocked = True
+            detected_risks.append({
+                "risk_type": "COMBINATORIAL_TRIPLE_WHAMMY",
+                "severity": "CRITICAL_HARD_STOP",
+                "clinical_syndrome": "Acute Kidney Injury & Hyperkalemic Renal Shutdown",
+                "mechanism": "Simultaneous afferent arteriolar constriction (NSAID), efferent dilation (ACEi/ARB), and volume depletion (Diuretic) collapses glomerular perfusion pressure.",
+                "action": "Immediate order hold; substitute Paracetamol or non-NSAID analgesia."
+            })
+
+        # 2. Additive QTc Prolongation
+        qt_agents = ["amiodarone", "sotalol", "haloperidol", "ondansetron", "methadone", "ciprofloxacin", "levofloxacin", "moxifloxacin", "azithromycin", "clarithromycin", "fluconazole", "quetiapine"]
+        detected_qt = set()
+        for q in qt_agents:
+            for d in drugs_lower:
+                if q in d:
+                    detected_qt.add(q)
+        if len(detected_qt) >= 2:
+            detected_risks.append({
+                "risk_type": "POLYPHARMACY_ADDITIVE_QTC",
+                "severity": "MAJOR_WARNING",
+                "clinical_syndrome": "Torsades de Pointes & Fatal Ventricular Arrhythmia",
+                "implicated_drugs": sorted(list(detected_qt)),
+                "action": "Baseline 12-lead ECG and continuous cardiac telemetry required."
+            })
+
+        return {
+            "total_drugs_screened": len(all_drugs),
+            "is_blocked": is_blocked,
+            "detected_risks_count": len(detected_risks),
+            "risks": detected_risks
+        }
+
 

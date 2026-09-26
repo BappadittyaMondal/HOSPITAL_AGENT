@@ -973,6 +973,82 @@ class ExtendedBayesianDiagnosticEngine:
         results.sort(key=lambda x: x["posterior_probability"], reverse=True)
         return results
 
+    def evaluate_case_with_ood_gate(
+        self,
+        present_snomed_ids: Set[str],
+        absent_snomed_ids: Set[str],
+        category_filter: Optional[str] = None,
+        min_posterior_threshold: float = 0.35,
+        min_feature_matches: int = 1
+    ) -> Dict[str, Any]:
+        """
+        Evaluates clinical presentation across disease registry with an explicit
+        Out-of-Distribution (OOD) Abstention Gate.
+        
+        Clinical Governance Rationale:
+        When a patient presents with atypical, rare, or unindexed conditions (e.g. Addisonian crisis,
+        TTP, Hemophagocytic Lymphohistiocytosis) that are absent from the 52-condition registry,
+        standard Bayesian models force the nearest disease onto the patient.
+        
+        The OOD Abstention Gate detects when:
+        1. Present findings have 0 matches across the entire registry.
+        2. Top posterior probability falls below the minimum confidence threshold (< 0.35).
+        3. Top matching condition has zero positive feature matches (pure prior artifact).
+        
+        Under OOD conditions, the system withholds automated disease confirmation and outputs:
+        status: "OUT_OF_DISTRIBUTION_PATHOLOGY_UNRECOGNIZED_MANDATORY_SPECIALIST_REFERRAL"
+        """
+        diff = self.evaluate_case(
+            present_snomed_ids=present_snomed_ids,
+            absent_snomed_ids=absent_snomed_ids,
+            category_filter=category_filter
+        )
+        
+        top_match = diff[0] if diff else None
+        
+        # Check OOD conditions
+        is_empty_findings = len(present_snomed_ids) == 0
+        has_zero_matches = True
+        for d in diff:
+            pos_matches = [f for f in d.get("findings_breakdown", []) if f.get("status") == "PRESENT"]
+            if len(pos_matches) >= min_feature_matches:
+                has_zero_matches = False
+                break
+                
+        top_prob = top_match["posterior_probability"] if top_match else 0.0
+        is_below_confidence = top_prob < min_posterior_threshold
+        
+        if is_empty_findings or has_zero_matches or is_below_confidence:
+            ood_triggered = True
+            diagnostic_status = "OUT_OF_DISTRIBUTION_PATHOLOGY_UNRECOGNIZED_MANDATORY_SPECIALIST_REFERRAL"
+            confidence_level = "LOW_CONFIDENCE_UNINDEXED_PATHOLOGY"
+            safety_notice = (
+                "STATUTORY CLINICAL SAFETY ADVISORY: The patient's clinical presentation does not "
+                "statistically correlate with any recognized condition in the 52-disease active registry. "
+                "Automated recommendation is withheld to prevent lethal misdiagnosis. "
+                "Immediate senior multidisciplinary consultation, comprehensive metabolic/imaging "
+                "workup, and out-of-distribution tertiary referral are mandatory."
+            )
+        else:
+            ood_triggered = False
+            diagnostic_status = "IN_DISTRIBUTION_DIAGNOSTIC_CONSIDERATION"
+            confidence_level = "HIGH_CONFIDENCE" if top_prob >= 0.70 else "MODERATE_CONFIDENCE"
+            safety_notice = (
+                "CLINICAL DECISION SUPPORT NOTICE: Evaluated against active clinical registry. "
+                "All draft differentials require clinical verification and correlation by attending RMP."
+            )
+            
+        return {
+            "ood_abstention_triggered": ood_triggered,
+            "diagnostic_status": diagnostic_status,
+            "confidence_level": confidence_level,
+            "top_match_disease_key": top_match["disease_key"] if top_match and not ood_triggered else None,
+            "top_match_posterior_probability": top_prob,
+            "findings_evaluated_count": len(present_snomed_ids) + len(absent_snomed_ids),
+            "safety_advisory": safety_notice,
+            "differential_ranked": diff
+        }
+
     def get_disease_by_key(self, key: str) -> Optional[DiseaseEntity]:
         return DISEASE_REGISTRY.get(key)
 
@@ -980,3 +1056,4 @@ class ExtendedBayesianDiagnosticEngine:
         return len(DISEASE_REGISTRY)
 
 global_disease_registry_engine = ExtendedBayesianDiagnosticEngine()
+
